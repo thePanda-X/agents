@@ -116,6 +116,9 @@ type Model struct {
 	overlayStack                                           []overlayFrame
 	noticeText, errorText                                  string
 	noticeAt, errorAt                                      time.Time
+	branchWorkspace, branch                                string
+	branchPending                                          bool
+	branchChecked                                          time.Time
 }
 
 func New(options Options) *Model {
@@ -151,7 +154,7 @@ func New(options Options) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.input.Focus(), m.connect(m.opts.Restore), m.awaitEvent(), tick())
+	return tea.Batch(m.input.Focus(), m.connect(m.opts.Restore), m.awaitEvent(), m.refreshBranch(time.Now()), tick())
 }
 
 func command(fn func()) tea.Cmd { return func() tea.Msg { fn(); return nil } }
@@ -346,6 +349,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncInteraction()
 		cmds = append(cmds, m.awaitEvent())
 	case tickMsg:
+		cmds = append(cmds, m.refreshBranch(time.Time(msg)))
 		frame := int(time.Time(msg).UnixMilli() / 120)
 		if frame != m.toolSpinnerFrame && !m.opts.Settings.ReducedMotion {
 			m.toolSpinnerFrame = frame
@@ -367,6 +371,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.save())
 		}
 		cmds = append(cmds, tick())
+	case branchMsg:
+		m.branchPending = false
+		if msg.workspace == m.activeWorkspace() {
+			m.branchWorkspace, m.branch = msg.workspace, msg.branch
+		}
 	case filesMsg:
 		if m.overlay != "files" || msg.generation != m.filePickerGeneration {
 			break

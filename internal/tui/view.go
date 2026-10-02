@@ -61,12 +61,16 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) header(width int) string {
-	workspace := m.opts.Agent.Workspace
-	if c := m.state.Active(); c != nil {
-		workspace = c.Info.Workspace
+	workspace := m.activeWorkspace()
+	branch := ""
+	if workspace == m.branchWorkspace {
+		branch = m.branch
 	}
 	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(workspace, home+string(os.PathSeparator)) {
 		workspace = "~" + strings.TrimPrefix(workspace, home)
+	}
+	if branch != "" {
+		workspace += ":" + branch
 	}
 	left := theme.Quiet.Render(theme.Clean(workspace))
 	if c := m.state.Active(); c != nil && c.Info.Title != "" {
