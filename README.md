@@ -19,6 +19,10 @@ Then run `agents` from any project directory. It automatically uses your shell's
 current working directory as the workspace, not the binary's location or a
 parent Git repository root. No `--cwd` argument is required.
 
+The header shows the workspace as `<dir>:<branch>` when a Git branch is available
+and refreshes it automatically. Outside Git repositories or with a detached
+HEAD, it shows just the directory.
+
 Go installs the command into `$GOBIN`, or `$(go env GOPATH)/bin` when GOBIN is
 unset. Make sure that directory is on your `PATH`.
 
