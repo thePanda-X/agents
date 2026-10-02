@@ -1,0 +1,13 @@
+Before the table.
+
+    Harness    │  Transport  │  Status
+  ─────────────┼─────────────┼──────────
+    OpenCode   │  ACP stdio  │   Ready
+  ─────────────┼─────────────┼──────────
+    Claude     │     ACP     │ Planned
+    Agent      │   bridge    │
+  ─────────────┼─────────────┼──────────
+    Codex      │     ACP     │ Planned
+               │   bridge    │
+
+  After the table.
