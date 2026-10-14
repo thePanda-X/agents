@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"agents/internal/acpclient"
 	"agents/internal/harness"
 	"agents/internal/harness/claude"
 	"agents/internal/harness/demo"
@@ -183,7 +182,8 @@ func TestOpenCodeIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	client, err := acpclient.New(ctx, harness.Options{Workspace: t.TempDir(), Launch: opencode.Descriptor().Launch}, func(harness.Event) {})
+	descriptor := opencode.Descriptor()
+	client, err := descriptor.Factory(ctx, harness.Options{Workspace: t.TempDir(), Launch: descriptor.Launch}, func(harness.Event) {})
 	if err != nil {
 		t.Fatal(err)
 	}

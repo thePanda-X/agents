@@ -18,6 +18,14 @@ func optional[T any](o acp.Opt[T]) *T {
 	return &value
 }
 
+func metadataString(o acp.Opt[string]) *string {
+	if o.IsNull() {
+		empty := ""
+		return &empty
+	}
+	return optional(o)
+}
+
 func value[T any](o acp.Opt[T]) T { v, _ := o.Get(); return v }
 
 func supported[T any](o acp.Opt[T]) bool { _, ok := o.Get(); return ok }
@@ -172,6 +180,7 @@ func normalizeUpdate(notification *acp.SessionNotification) (harness.Event, erro
 		e.Kind, e.ID = harness.Mode, string(v.CurrentModeID)
 	case *acp.SessionInfoUpdate:
 		e.Kind, e.Text = harness.Metadata, value(v.Title)
+		e.Metadata = harness.SessionInfoPatch{Title: metadataString(v.Title), UpdatedAt: metadataString(v.UpdatedAt)}
 	case *acp.UsageUpdate:
 		e.Kind, e.Usage = harness.UsageChanged, harness.Usage{Used: v.Used, Size: v.Size}
 		if cost, ok := v.Cost.Get(); ok {

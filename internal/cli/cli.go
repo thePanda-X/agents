@@ -130,7 +130,9 @@ func Run(parent context.Context, args []string) error {
 		}
 	}
 	if sessionID != "" {
-		restore = &harness.SessionInfo{ID: sessionID, Workspace: workspace, AdditionalRoots: roots}
+		// A bare ID has no verified workspace. Let ACP discover it rather than
+		// treating the launch directory as a saved reference on listing failure.
+		restore = &harness.SessionInfo{ID: sessionID, AdditionalRoots: roots}
 	}
 	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) {
 		return errors.New("an interactive terminal is required; use --help or --list-harnesses for non-interactive commands")

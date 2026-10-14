@@ -43,6 +43,9 @@ type Options struct {
 	Workspace       string
 	AdditionalRoots []string
 	Launch          Launch
+	// DefaultModes lists verified harness mode IDs, most permissive first.
+	// Only advertised choices are selected, on session creation and load/resume.
+	DefaultModes []string
 	// MCP is ACP's standard session MCP-server configuration. Keeping it opaque
 	// here avoids making the domain depend on an individual Go ACP SDK.
 	MCP         json.RawMessage
@@ -55,6 +58,12 @@ type SessionInfo struct {
 	Title           string   `json:"title"`
 	UpdatedAt       string   `json:"updatedAt"`
 	AdditionalRoots []string `json:"additionalDirectories,omitempty"`
+}
+
+// SessionInfoPatch preserves partial metadata updates. Nil means unchanged;
+// a pointer to an empty string clears the field.
+type SessionInfoPatch struct {
+	Title, UpdatedAt *string
 }
 
 type Session struct {
@@ -191,6 +200,7 @@ type Event struct {
 	Plan             []PlanEntry
 	Commands         []Command
 	Options          []ConfigOption
+	Metadata         SessionInfoPatch
 	Usage            Usage
 	Interaction      *Interaction
 	ID, Text, Reason string

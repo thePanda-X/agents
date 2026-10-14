@@ -28,7 +28,9 @@ func NewController(ctx context.Context) *Controller {
 }
 
 func (c *Controller) publish(e harness.Event) {
-	if e.At.IsZero() {
+	// Message/tool updates may be historical. The reducer knows whether the
+	// session is replaying and assigns receipt times only to live entries.
+	if e.At.IsZero() && e.Kind != harness.Message && e.Kind != harness.Tool {
 		e.At = time.Now()
 	}
 	select {
