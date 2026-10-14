@@ -6,7 +6,10 @@ hierarchy, discoverable commands, and preservation of drafts and reading positio
 ## Navigation map
 
 - `model.go`: Bubble Tea messages, application events, focus, composer sizing,
-  viewport refresh, and persistence.
+  and viewport refresh.
+- `sessions.go`: connection, reconnection, and new-conversation transitions.
+- `persistence.go`: snapshots, draft persistence, and acknowledged autosave retries.
+- `pastes.go`: bounded text paste folding, atomic markers, and full-text expansion.
 - `keys.go`: action registry, defaults/remaps, key precedence, and routing.
 - `commands.go`: local slash commands, aliases, completion, native bypass.
 - `actions.go`: palettes, settings, selection dispatch, and help.
@@ -29,6 +32,9 @@ hierarchy, discoverable commands, and preservation of drafts and reading positio
 - Preserve the draft and attachments until submission succeeds or the user
   explicitly discards them. Picker cancellation must not unexpectedly send,
   clear, or replace a draft.
+- Paste markers are presentation only. Use full draft text for submission,
+  persistence, recovery, history, and external editors; keep their block data
+  scoped to its draft buffer. Reject oversized pastes rather than truncating them.
 
 ## Keyboard and command semantics
 
@@ -52,7 +58,8 @@ hierarchy, discoverable commands, and preservation of drafts and reading positio
 - Entry row positions must exactly match rendered output. Account for separators,
   grouping, hidden entries, and padding in both rendering and navigation.
 - Compact activity blocks stay dense, with one blank row at activity/response
-  boundaries. Width caps apply to prose, not code/diffs that need wider content.
+  boundaries. Transcript text uses the available width rather than a fixed prose
+  cap; account for gutters and message chrome without narrowing code/diffs.
 - Preserve reading anchors across density changes, resizing, folding, and updates.
 - Explicit `Expanded` map values override global thought visibility, including
   `false`. Absence means use the global preference.

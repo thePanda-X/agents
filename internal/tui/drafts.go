@@ -18,6 +18,8 @@ type draftKey struct{ Harness, Workspace, Session string }
 // to one conversation, including the local draft before session creation.
 type draftBuffer struct {
 	Text        string
+	Loaded      bool
+	Pastes      []pastedText
 	Attachments []harness.Attachment
 	Generation  uint64
 	Pending     int
@@ -55,9 +57,10 @@ func (m *Model) currentDraft() *draftBuffer {
 func (m *Model) stashDraft() {
 	buffer := m.currentDraft()
 	buffer.Text = m.input.Value()
+	buffer.Loaded = true
 	buffer.Attachments = append([]harness.Attachment(nil), m.attachments...)
 	if c := m.state.Active(); c != nil {
-		c.Draft, c.DraftLoaded = buffer.Text, true
+		c.Draft, c.DraftLoaded = m.draftText(), true
 	}
 }
 
@@ -76,7 +79,7 @@ func (m *Model) clearAttachments() {
 	buffer.Pending, buffer.Attachments = 0, nil
 	m.attachments = nil
 	m.clipboardGeneration++
-	m.pastingImage = false
+	m.pastingImage, m.pastingText = false, false
 	if m.creatingSession {
 		m.pendingFirstPrompt = nil
 		m.state.Notice = "Attachments removed · first send cancelled · draft preserved"
@@ -155,7 +158,7 @@ func (m *Model) recoverSubmission() tea.Cmd {
 		m.state.Notice = "No failed submission to recover in this conversation"
 		return nil
 	}
-	if m.input.Value() != "" || len(m.attachments) > 0 || buffer.Pending > 0 || m.pastingImage {
+	if m.input.Value() != "" || len(m.attachments) > 0 || buffer.Pending > 0 || m.pastingImage || m.pastingText {
 		m.state.Notice = "Save or clear the current draft and attachments before using /recover"
 		return nil
 	}
@@ -163,7 +166,9 @@ func (m *Model) recoverSubmission() tea.Cmd {
 		m.state.Notice = "Wait for the current turn before recovering a submission"
 		return nil
 	}
-	m.input.SetValue(buffer.Failed.Draft)
+	if !m.setDraftText(buffer.Failed.Draft) {
+		return nil
+	}
 	m.attachments = append([]harness.Attachment(nil), buffer.Failed.Prompt.Attachments...)
 	buffer.Failed = nil
 	m.stashDraft()
@@ -208,19 +213,26 @@ func (m *Model) removeAttachment(index int) {
 func (m *Model) restoreLocalBuffer() {
 	buffer := m.currentDraft()
 	text := buffer.Text
-	if text == "" {
+	if !buffer.Loaded {
 		workspace := m.opts.Snapshot.Workspaces[storage.Key(m.opts.Agent.Workspace, m.opts.Descriptor.ID)]
 		text = workspace.Drafts[""]
+		m.setDraftText(text)
+	} else {
+		m.setComposerAt(text, len(text))
 	}
-	m.input.SetValue(text)
 	m.restoreAttachments()
 }
 
 func (m *Model) stashClosedDraft(key draftKey) {
-	if c := m.state.Conversations[key.Session]; c != nil {
-		c.Draft, c.DraftLoaded = m.input.Value(), true
+	text := m.input.Value()
+	buffer := m.drafts[key]
+	if buffer != nil {
+		text = expandPastes(text, buffer.Pastes)
 	}
-	if buffer := m.drafts[key]; buffer != nil {
+	if c := m.state.Conversations[key.Session]; c != nil {
+		c.Draft, c.DraftLoaded = text, true
+	}
+	if buffer != nil {
 		buffer.Text = m.input.Value()
 		buffer.Attachments = append([]harness.Attachment(nil), m.attachments...)
 	}

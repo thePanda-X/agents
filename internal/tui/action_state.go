@@ -2,7 +2,7 @@ package tui
 
 func actionGroup(id string) string {
 	switch id {
-	case "files", "paste", "paste_image", "clear_attachments", "attachments":
+	case "files", "paste", "paste_image", "pastes", "clear_attachments", "attachments":
 		return "Attachments"
 	case "options", "effort", "harness", "auth", "reconnect", "cancel", "commands", "skills":
 		return "Agent"

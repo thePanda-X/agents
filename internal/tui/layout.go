@@ -3,6 +3,7 @@ package tui
 import tea "charm.land/bubbletea/v2"
 
 func (m *Model) toggleCompact() tea.Cmd {
+	m.clearTextSelection()
 	if m.dirty {
 		m.refresh()
 	}

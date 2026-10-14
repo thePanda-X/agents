@@ -16,6 +16,9 @@ import (
 
 func (m *Model) setTranscriptFocus(focused bool) tea.Cmd {
 	changed := m.focusedTranscript != focused
+	if changed {
+		m.clearTextSelection()
+	}
 	follow, anchor, offset := m.viewport.AtBottom(), 0, 0
 	if changed && m.opts.Settings.Compact {
 		previous := -1
@@ -271,7 +274,7 @@ func (m *Model) revealSearchOccurrence(index, occurrence int) {
 	if entry.Tool != nil {
 		m.expanded[entry.ID] = true
 	}
-	if entry.Role == "thought" {
+	if entry.Role == "thought" || entry.Role == "user" && transcript.LargeText(entry.Text) {
 		m.expanded[entry.ID+fmt.Sprint(index)] = true
 	}
 	m.refresh()

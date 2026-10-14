@@ -40,7 +40,7 @@ func TestClipboardImageFailureFallsBackToTextOnlyWhenRequested(t *testing.T) {
 	if cmd := m.receiveClipboardImage(msg); cmd == nil || len(m.attachments) != 0 {
 		t.Fatal("ordinary text paste did not fall back")
 	}
-	msg.fallback = false
+	msg.generation, msg.fallback = m.clipboardGeneration, false
 	if cmd := m.receiveClipboardImage(msg); cmd != nil || !errors.Is(m.state.LastError, app.ErrNoClipboardImage) {
 		t.Fatal("explicit image paste did not report missing image")
 	}

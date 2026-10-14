@@ -38,7 +38,11 @@ func (m *Model) feedback(width int) string {
 		return theme.Line(theme.Error.Render("! "+message), theme.Quiet.Render(hint), width)
 	}
 	if m.state.Notice != "" && (m.noticeAt.IsZero() || time.Since(m.noticeAt) < 8*time.Second) {
-		return theme.Quiet.Render(ansi.Truncate(strings.Join(strings.Fields(theme.Clean(m.state.Notice)), " "), width, "…"))
+		style := theme.Quiet
+		if strings.HasPrefix(m.state.Notice, "✓ ") {
+			style = theme.Success
+		}
+		return style.Render(ansi.Truncate(strings.Join(strings.Fields(theme.Clean(m.state.Notice)), " "), width, "…"))
 	}
 	return ""
 }

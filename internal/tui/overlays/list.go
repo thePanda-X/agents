@@ -33,11 +33,13 @@ type List struct {
 	Searchable         bool
 	MultiSelect        bool
 	Literal            bool
-	Marked             map[string]bool
-	Loading            bool
-	Scroll             int
-	EmptyMessage       string
-	Error, Hint        string
+	// GroupHeaders adds nonselectable headings and keeps matches in item order.
+	GroupHeaders bool
+	Marked       map[string]bool
+	Loading      bool
+	Scroll       int
+	EmptyMessage string
+	Error, Hint  string
 }
 
 func NewList(title string, items []Item, searchable bool) *List {
@@ -69,7 +71,9 @@ func (l *List) Filtered() []Item {
 			matches = append(matches, match{item, score})
 		}
 	}
-	sort.SliceStable(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
+	if !l.GroupHeaders {
+		sort.SliceStable(matches, func(i, j int) bool { return matches[i].score > matches[j].score })
+	}
 	result := make([]Item, len(matches))
 	for i, match := range matches {
 		result[i] = match.item
@@ -268,14 +272,36 @@ func (l *List) View(width, height int) string {
 	items := l.Filtered()
 	l.Cursor = min(max(l.Cursor, 0), max(0, len(items)-1))
 	count := max(1, height-lipgloss.Height(strings.Join(parts, "\n"))-footerRows)
+	// A scrolled group repeats its heading. With only one result row available,
+	// prioritize the selected item; its group remains visible in the title.
+	headers := l.GroupHeaders && count >= 2
+	windowEnd := func(start int) int {
+		rows, end := 0, start
+		for end < len(items) {
+			cost := 1
+			if headers && items[end].Group != "" && (end == start || items[end].Group != items[end-1].Group) {
+				cost++
+			}
+			if rows+cost > count {
+				break
+			}
+			rows += cost
+			end++
+		}
+		return end
+	}
 	// Scroll only when the cursor crosses the window edge. Clamp again after
 	// filtering or resizing, and always keep the selected row visible.
-	l.Scroll = min(max(0, l.Scroll), max(0, len(items)-count))
+	lastStart := max(0, len(items)-count)
+	if headers {
+		lastStart = max(0, len(items)-1)
+	}
+	l.Scroll = min(max(0, l.Scroll), lastStart)
 	if l.Cursor < l.Scroll {
 		l.Scroll = l.Cursor
 	}
-	if l.Cursor >= l.Scroll+count {
-		l.Scroll = l.Cursor - count + 1
+	for len(items) > 0 && l.Cursor >= windowEnd(l.Scroll) {
+		l.Scroll++
 	}
 	if len(items) == 0 {
 		message := "No matching results. Clear the filter."
@@ -293,8 +319,12 @@ func (l *List) View(width, height int) string {
 		parts = append(parts, theme.Quiet.Render(ansi.Truncate(message, width, "…")))
 	}
 	start := l.Scroll
-	for index := start; index < min(len(items), start+count); index++ {
+	end := windowEnd(start)
+	for index := start; index < end; index++ {
 		item := items[index]
+		if headers && item.Group != "" && (index == start || item.Group != items[index-1].Group) {
+			parts = append(parts, theme.Heading.Render(ansi.Truncate("─ "+oneLine(item.Group)+" ─", width, "…")))
+		}
 		label := oneLine(item.Label)
 		prefix := "  "
 		if index == l.Cursor {

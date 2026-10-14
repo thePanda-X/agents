@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"agents/internal/harness"
+	"agents/internal/tui/transcript"
 
+	bubbleskey "charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -23,6 +25,7 @@ var actionCatalog = []actionSpec{
 	{"files", "Attach files", "ctrl+f"},
 	{"paste", "Paste clipboard image or text", "ctrl+v"},
 	{"paste_image", "Paste clipboard image", ""},
+	{"pastes", "Review pasted text blocks", "alt+p"},
 	{"clear_attachments", "Remove attachments", ""},
 	{"attachments", "Review pending attachments", ""},
 	{"plan", "Agent plan", ""},
@@ -32,8 +35,8 @@ var actionCatalog = []actionSpec{
 	{"thoughts", "Toggle reasoning visibility", ""},
 	{"effort", "Cycle thinking effort", "ctrl+t"},
 	{"compact", "Toggle compact layout", "ctrl+x"},
-	{"copy", "Copy last response", "ctrl+y"},
-	{"editor", "Edit draft in external editor", "ctrl+e"},
+	{"copy", "Copy selected text or last response", "ctrl+y"},
+	{"editor", "Edit draft in external editor", "ctrl+g"},
 	{"inspect", "Inspect selected entry", ""},
 	{"code", "Copy a code block", ""},
 	{"open_file", "Open reported file in editor", ""},
@@ -122,7 +125,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			return m.cancelTurn()
 		}
 		if m.input.Value() != "" {
-			m.clearedDraft = m.input.Value()
+			m.clearedDraft = m.draftText()
 			m.input.Reset()
 			m.state.Notice = "Draft cleared · restore with /restore"
 			return nil
@@ -166,6 +169,12 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			}
 			return nil
 		case "delete", "ctrl+x":
+			if m.overlay == "pastes" {
+				if item, ok := m.list.Selected(); ok {
+					m.removePaste(item.Value.(pastedText))
+				}
+				return nil
+			}
 			if m.overlay == "attachments" {
 				if item, ok := m.list.Selected(); ok {
 					m.removeAttachment(item.Value.(int))
@@ -223,6 +232,15 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 	if action := m.actionFor(pressed); action != "" {
 		return m.perform(action)
+	}
+	if m.textSelection != nil {
+		if pressed == "esc" {
+			m.clearTextSelection()
+			return nil
+		}
+		if pressed == "y" && m.hasTextSelection() {
+			return m.copyTextSelection()
+		}
 	}
 	switch pressed {
 	case "tab":
@@ -290,8 +308,12 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	var cmd tea.Cmd
+	m.clearTextSelection()
+	if bubbleskey.Matches(key, m.input.KeyMap.Paste) {
+		return m.pasteClipboardText()
+	}
 	before := m.input.Value()
-	m.input, cmd = m.input.Update(key)
+	cmd = m.updateComposer(key)
 	// Only inserting a slash opens automatic completion. Deleting back to a
 	// bare slash after dismissing the picker must remain an ordinary edit.
 	if (pressed == "/" || key.Text == "/") && before != m.input.Value() && strings.TrimSpace(m.input.Value()) == "/" {
@@ -338,6 +360,8 @@ func (m *Model) perform(action string) tea.Cmd {
 		return m.pasteClipboardImage(true)
 	case "paste_image":
 		return m.pasteClipboardImage(false)
+	case "pastes":
+		m.openPastes()
 	case "quit":
 		return m.requestQuit()
 	case "cancel":
@@ -389,7 +413,9 @@ func (m *Model) perform(action string) tea.Cmd {
 				m.state.Notice = "Draft not empty · clear or save it before restoring"
 				return nil
 			}
-			m.input.SetValue(m.clearedDraft)
+			if !m.setDraftText(m.clearedDraft) {
+				return nil
+			}
 			m.clearedDraft = ""
 			return m.setTranscriptFocus(false)
 		}
@@ -417,6 +443,7 @@ func (m *Model) cancelTurn() tea.Cmd {
 	}
 	if m.creatingSession && m.pendingFirstPrompt != nil {
 		m.pendingFirstPrompt = nil
+		m.pendingFirstDraft = ""
 		m.state.Notice = "First send cancelled · draft preserved"
 		return nil
 	}
@@ -518,8 +545,8 @@ func (m *Model) expandSelected() tea.Cmd {
 	if entry == nil {
 		return nil
 	}
-	if entry.Tool == nil && entry.Role != "thought" {
-		m.state.Notice = "Select a tool or thinking block to expand · ↑↓ select entries"
+	if entry.Tool == nil && entry.Role != "thought" && !(entry.Role == "user" && transcript.LargeText(entry.Text)) {
+		m.state.Notice = "Select a tool, thinking block or long user message to expand · ↑↓ select entries"
 		return nil
 	}
 	key := entry.ID
@@ -531,6 +558,9 @@ func (m *Model) expandSelected() tea.Cmd {
 		if !overridden {
 			expanded = m.opts.Settings.ShowThoughts
 		}
+	} else if entry.Role == "user" {
+		key += fmt.Sprint(m.selected)
+		expanded = m.expanded[key]
 	}
 	m.expanded[key] = !expanded
 	m.dirty = true
@@ -549,6 +579,9 @@ func (m *Model) expandSelected() tea.Cmd {
 }
 
 func (m *Model) copySelected() tea.Cmd {
+	if m.hasTextSelection() {
+		return m.copyTextSelection()
+	}
 	c := m.state.Active()
 	if c == nil || m.selected >= len(c.Entries) {
 		return nil
@@ -558,19 +591,20 @@ func (m *Model) copySelected() tea.Cmd {
 	if entry.Tool != nil {
 		text = entry.Tool.Title + "\n" + entry.Tool.Text
 	}
-	m.state.Notice = "Copy requested (requires terminal clipboard support)."
-	return tea.SetClipboard(text)
+	return m.copyText(text, "Entry")
 }
 
 func (m *Model) copyLast() tea.Cmd {
+	if m.hasTextSelection() {
+		return m.copyTextSelection()
+	}
 	c := m.state.Active()
 	if c == nil {
 		return nil
 	}
 	for i := len(c.Entries) - 1; i >= 0; i-- {
 		if c.Entries[i].Role == "assistant" {
-			m.state.Notice = "Copy requested (requires terminal clipboard support)."
-			return tea.SetClipboard(c.Entries[i].Text)
+			return m.copyText(c.Entries[i].Text, "Response")
 		}
 	}
 	m.state.Notice = "No assistant response to copy yet."
@@ -582,13 +616,13 @@ func (m *Model) navigateHistory(delta int) {
 		return
 	}
 	if m.historyIndex == len(m.history) {
-		m.draftBeforeHistory = m.input.Value()
+		m.draftBeforeHistory = m.draftText()
 	}
 	m.historyIndex = min(max(0, m.historyIndex+delta), len(m.history))
 	if m.historyIndex == len(m.history) {
-		m.input.SetValue(m.draftBeforeHistory)
+		m.setDraftText(m.draftBeforeHistory)
 	} else {
-		m.input.SetValue(m.history[m.historyIndex])
+		m.setDraftText(m.history[m.historyIndex])
 	}
 }
 

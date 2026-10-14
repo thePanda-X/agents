@@ -113,25 +113,50 @@ func (m *Model) populateSessions() {
 		m.list.Description += " Ctrl+X deletes after confirmation."
 	}
 	m.list.Hint = "Enter load · Esc close"
+	m.list.GroupHeaders = true
 	sessions := append([]harness.SessionInfo(nil), m.state.Sessions...)
-	slices.SortStableFunc(sessions, func(a, b harness.SessionInfo) int { return strings.Compare(b.UpdatedAt, a.UpdatedAt) })
+	slices.SortStableFunc(sessions, func(a, b harness.SessionInfo) int {
+		at, aErr := time.Parse(time.RFC3339Nano, a.UpdatedAt)
+		bt, bErr := time.Parse(time.RFC3339Nano, b.UpdatedAt)
+		if aErr != nil && bErr != nil {
+			return 0
+		}
+		if aErr != nil {
+			return 1
+		}
+		if bErr != nil {
+			return -1
+		}
+		return bt.Compare(at)
+	})
 	for _, info := range sessions {
 		label := info.Title
 		if label == "" {
 			label = info.ID
 		}
 		current := info.ID == m.state.ActiveID
-		m.list.Items = append(m.list.Items, overlays.Item{ID: info.ID, Label: label, Detail: sessionDate(info.UpdatedAt), Keywords: info.ID + " " + info.Workspace, Current: current, Preview: label + "\n\nWorkspace: " + info.Workspace + "\nUpdated: " + info.UpdatedAt + "\nSession: " + info.ID, Value: info})
+		detail := ""
+		if at, err := time.Parse(time.RFC3339Nano, info.UpdatedAt); err == nil {
+			detail = at.Local().Format("15:04")
+		}
+		m.list.Items = append(m.list.Items, overlays.Item{ID: info.ID, Label: label, Detail: detail, Group: sessionDay(info.UpdatedAt), Keywords: info.ID + " " + info.Workspace, Current: current, Preview: label + "\n\nWorkspace: " + info.Workspace + "\nUpdated: " + sessionDate(info.UpdatedAt) + "\nSession: " + info.ID, Value: info})
 	}
 	m.list.Cursor, m.list.Scroll = cursor, scroll
 	selectListID(m.list, selectedID)
 }
 
 func sessionDate(value string) string {
-	if at, err := time.Parse(time.RFC3339, value); err == nil {
-		return at.Local().Format("Jan 2, 15:04")
+	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return at.Local().Format("Jan 2, 2006, 15:04")
 	}
-	return value
+	return "Unknown date"
+}
+
+func sessionDay(value string) string {
+	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return at.Local().Format("January 2, 2006")
+	}
+	return "Unknown date"
 }
 
 func (m *Model) confirmDelete(item overlays.Item) {
@@ -286,7 +311,7 @@ func (m *Model) openChanges() {
 
 func (m *Model) openSettings() {
 	m.openList("settings", "Interface settings", []overlays.Item{
-		{ID: "mouse", Label: "Mouse scrolling", Detail: onOff(m.opts.Settings.Mouse)},
+		{ID: "mouse", Label: "Mouse scrolling, text selection, and links", Detail: onOff(m.opts.Settings.Mouse)},
 		{ID: "thoughts", Label: "Expand reasoning", Detail: onOff(m.opts.Settings.ShowThoughts)},
 		{ID: "vim", Label: "Vim navigation (Esc browse, i compose)", Detail: onOff(m.opts.Settings.VimNavigation)},
 		{ID: "compact", Label: "Compact layout", Detail: onOff(m.opts.Settings.Compact)},
@@ -322,6 +347,7 @@ func (m *Model) toggleSetting(item overlays.Item) tea.Cmd {
 	var cmd tea.Cmd
 	switch item.ID {
 	case "mouse":
+		m.clearTextSelection()
 		m.opts.Settings.Mouse = !m.opts.Settings.Mouse
 	case "thoughts":
 		m.opts.Settings.ShowThoughts = !m.opts.Settings.ShowThoughts
@@ -401,11 +427,14 @@ J / K        Next / previous turn
 /            Search transcript; n/N repeat
 Enter/Space  Expand tool or thought
 o            Open entry detail pager
-y / c        Copy entry / choose code block
+y / c        Copy highlighted text (or entry) / choose code block
 e / v        Open reported file / export output to editor
 ?            Help
 
 With Vim navigation enabled: Esc enters browse; Ctrl+D/U half-page scroll.
+Mouse: click a transcript link to open it in the browser.
+Left-drag text to highlight; right-click or y copies it.
+Esc clears text highlighting. Copy uses terminal OSC52 clipboard support.
 Detail pager: j/k scroll · Ctrl+D/U half-page · gg/G top/bottom · J/K hunks.
 Pickers: type to filter · Ctrl+N/P select · Tab marks files · Esc closes.
 
@@ -450,7 +479,7 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 				m.state.Notice = "Cancel the active turn before loading another session."
 				return nil
 			}
-			c.Draft = m.input.Value()
+			c.Draft = m.draftText()
 			c.DraftLoaded = true
 		}
 		m.stashDraft()
@@ -493,18 +522,17 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 		m.revealSearch(item.Value.(int))
 	case "history":
 		if m.historyIndex == len(m.history) {
-			m.draftBeforeHistory = m.input.Value()
+			m.draftBeforeHistory = m.draftText()
 		}
 		for index, text := range m.history {
 			if text == item.Value.(string) {
 				m.historyIndex = index
 			}
 		}
-		m.input.SetValue(item.Value.(string))
+		m.setDraftText(item.Value.(string))
 		return m.setTranscriptFocus(false)
 	case "code":
-		m.state.Notice = "Code copy requested (terminal clipboard required)."
-		return tea.SetClipboard(item.Value.(string))
+		return m.copyText(item.Value.(string), "Code")
 	case "changes", "file_changes":
 		if group, ok := item.Value.([]reportedChange); ok {
 			var items []overlays.Item
@@ -529,6 +557,10 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 			m.openInfo("Attachment details", item.Preview)
 			m.overlayStack = append(history, overlayFrame{source, "attachments"})
 		}
+	case "pastes":
+		paste := item.Value.(pastedText)
+		m.openInfo(paste.Marker+" · preview", pastePreview(paste.Text, 64<<10))
+		m.overlayStack = append(history, overlayFrame{source, "pastes"})
 	case "editor_files":
 		return m.editReportedPath(item.Value.(string))
 	case "files":
@@ -562,7 +594,7 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 		m.input.Reset()
 		m.attachments = nil
 		m.clipboardGeneration++
-		m.pastingImage = false
+		m.pastingImage, m.pastingText = false, false
 		m.restoreLocalBuffer()
 		m.history = nil
 		clear(m.expanded)
