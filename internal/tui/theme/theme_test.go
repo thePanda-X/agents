@@ -26,3 +26,27 @@ func TestTerminalDefaultPreservesReverseCursorAndBold(t *testing.T) {
 		t.Fatalf("terminal appearance lost emphasis/cursor or retained colors: %q", result)
 	}
 }
+
+func TestTextSelectionUsesPlumWithoutReverseOrBold(t *testing.T) {
+	result := TextSelection.Render("selected")
+	if !strings.Contains(result, "48;2;73;51;64") || !strings.Contains(result, "38;2;232;230;234") {
+		t.Fatalf("selection lost its plum background or light text: %q", result)
+	}
+	if TextSelection.GetReverse() || TextSelection.GetBold() {
+		t.Fatal("text selection should not use reverse video or bold")
+	}
+}
+
+func TestHighContrastTextSelection(t *testing.T) {
+	result := HighContrast(TextSelection.Render("selected"))
+	if !strings.Contains(result, "48;2;96;62;81") || !strings.Contains(result, "38;2;255;255;255") {
+		t.Fatalf("high contrast did not remap selection background and text: %q", result)
+	}
+}
+
+func TestTerminalTextSelectionRemainsVisibleWithoutApplicationColors(t *testing.T) {
+	result := TerminalDefault(TerminalTextSelection.Render("selected"))
+	if !strings.Contains(result, "\x1b[7mselected") || strings.Contains(result, "38;") || strings.Contains(result, "48;") {
+		t.Fatalf("terminal selection lost reverse video or retained application colors: %q", result)
+	}
+}

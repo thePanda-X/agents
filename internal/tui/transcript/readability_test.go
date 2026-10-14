@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestMixedMarkdownCapsProseWithoutNarrowingCode(t *testing.T) {
+func TestMixedMarkdownUsesAvailableWidthWithoutLosingReferences(t *testing.T) {
 	prose := strings.Repeat("Readable prose with a [reference][ref]. ", 12)
 	code := strings.Repeat("code_", 24)
 	source := prose + "\n\n```text\n" + code + "\n```\n\n" + prose + "\n\n[ref]: https://example.com"
@@ -21,10 +21,17 @@ func TestMixedMarkdownCapsProseWithoutNarrowingCode(t *testing.T) {
 	if !strings.Contains(plain, code) || !strings.Contains(plain, "example.com") {
 		t.Fatal("mixed rendering narrowed code or lost reference-link resolution")
 	}
+	wideProse := 0
 	for _, line := range strings.Split(plain, "\n") {
-		if strings.Contains(line, "Readable prose") && ansi.StringWidth(line) > 96 {
-			t.Fatalf("prose stayed too wide: %d", ansi.StringWidth(line))
+		if ansi.StringWidth(line) > 150 {
+			t.Fatalf("mixed Markdown exceeds available width: %d", ansi.StringWidth(line))
 		}
+		if strings.Contains(line, "Readable prose") && ansi.StringWidth(strings.TrimRight(line, " ")) >= 140 {
+			wideProse++
+		}
+	}
+	if wideProse < 2 {
+		t.Fatal("prose before or after code did not use the available width")
 	}
 }
 

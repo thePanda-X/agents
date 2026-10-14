@@ -23,6 +23,7 @@ func HighContrast(content string) string {
 		"38;2;72;68;78", "38;2;166;161;179",
 		"38;2;242;184;207", "38;2;255;209;224",
 		"48;2;51;48;57", "48;2;69;64;75",
+		"48;2;73;51;64", "48;2;96;62;81",
 	)
 	return sgr.ReplaceAllStringFunc(content, colors.Replace)
 }
@@ -79,6 +80,13 @@ var (
 	Error   = lipgloss.NewStyle().Foreground(Red)
 	Success = lipgloss.NewStyle().Foreground(Green)
 	Panel   = Body.Background(Surface).Border(lipgloss.RoundedBorder()).BorderForeground(Border).Padding(1, 2)
+)
+
+// Text selection is distinct from picker focus and search matches. Terminal
+// default appearance needs reverse video because application colors are removed.
+var (
+	TextSelection         = Body.Background(lipgloss.Color("#493340"))
+	TerminalTextSelection = lipgloss.NewStyle().Reverse(true)
 )
 
 // Clean prevents untrusted agent text from emitting terminal control sequences,

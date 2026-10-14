@@ -67,16 +67,21 @@ func TestCompactToolGroupsExpandForBrowseAndKeepFailuresAndSingletonsVisible(t *
 	}
 }
 
-func TestUltrawideProseCapsWidthButCodeKeepsAvailableWidth(t *testing.T) {
+func TestUltrawideProseUsesAvailableWidthAndCodeStillFits(t *testing.T) {
 	r := newMarkdownRenderer(160)
 	prose, err := r.Render(strings.Repeat("Readable prose words ", 50))
 	if err != nil {
 		t.Fatal(err)
 	}
+	proseWidth := 0
 	for _, line := range strings.Split(prose, "\n") {
-		if ansi.StringWidth(line) > 96 {
-			t.Fatal("prose exceeds comfortable width")
+		if ansi.StringWidth(line) > 160 {
+			t.Fatal("prose exceeds available width")
 		}
+		proseWidth = max(proseWidth, ansi.StringWidth(strings.TrimRight(ansi.Strip(line), " ")))
+	}
+	if proseWidth < 150 {
+		t.Fatalf("prose wraps too early: widest content row is %d cells, available width is 160", proseWidth)
 	}
 	code, err := r.Render("```text\n" + strings.Repeat("x", 120) + "\n```")
 	if err != nil {
@@ -84,6 +89,9 @@ func TestUltrawideProseCapsWidthButCodeKeepsAvailableWidth(t *testing.T) {
 	}
 	wide := false
 	for _, line := range strings.Split(code, "\n") {
+		if ansi.StringWidth(line) > 160 {
+			t.Fatal("code exceeds available width")
+		}
 		if ansi.StringWidth(line) > 96 {
 			wide = true
 		}
@@ -222,7 +230,7 @@ func TestUserTimestampFitsOnFirstContentRowWithoutWrapping(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		for _, focused := range []bool{false, true} {
 			for _, width := range []int{32, 60, 120, 160} {
-				entry := &app.Entry{Role: "user", Text: "A short prompt\n" + strings.Repeat("more words ", 30), At: time.Date(2026, 10, 1, 15, 14, 0, 0, time.UTC)}
+				entry := &app.Entry{Role: "user", Text: "A short prompt\n" + strings.Repeat("more words ", 30), At: time.Date(2026, 10, 1, 15, 14, 0, 0, time.Local)}
 				content, _ := New().Render(&app.Conversation{Entries: []*app.Entry{entry}}, Options{Width: width, Compact: compact, Focused: focused})
 				lines := strings.Split(ansi.Strip(content), "\n")
 				found := false
@@ -245,6 +253,15 @@ func TestUserTimestampFitsOnFirstContentRowWithoutWrapping(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestHistoricalPromptWithoutTimestampDoesNotShowInventedTime(t *testing.T) {
+	entry := &app.Entry{Role: "user", Text: "Historical prompt"}
+	content, _ := New().Render(&app.Conversation{Entries: []*app.Entry{entry}}, Options{Width: 80})
+	plain := ansi.Strip(content)
+	if !strings.Contains(plain, "Historical prompt") || strings.Contains(plain, "AM") || strings.Contains(plain, "PM") {
+		t.Fatalf("historical prompt displays an invented time: %s", plain)
 	}
 }
 

@@ -19,7 +19,6 @@ import (
 
 type markdownRenderer struct {
 	markdown goldmark.Markdown
-	prose    *markdownRenderer
 	tables   *tableLayout
 }
 
@@ -54,11 +53,7 @@ func newMarkdownRenderer(width int) *markdownRenderer {
 	markdown.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(
 		util.Prioritized(ansi.NewRenderer(ansi.Options{Styles: style, WordWrap: width}), 1000),
 	)))
-	r := &markdownRenderer{markdown: markdown, tables: tables}
-	if width > 96 {
-		r.prose = newMarkdownRenderer(96)
-	}
-	return r
+	return &markdownRenderer{markdown: markdown, tables: tables}
 }
 
 func (r *markdownRenderer) Render(source string) (string, error) {
@@ -68,35 +63,6 @@ func (r *markdownRenderer) Render(source string) (string, error) {
 	// Injected Text nodes reference an appended marker, never parsed as source
 	// Markdown. Glamour supports Text segments but not synthetic String nodes.
 	data = append(data, r.tables.marker...)
-	if r.prose != nil {
-		// Render parsed top-level blocks at their appropriate widths. Reuse the
-		// original AST so links, nested markup, and table markers stay intact.
-		var blocks []string
-		for node := document.FirstChild(); node != nil; {
-			next := node.NextSibling()
-			wide := false
-			_ = ast.Walk(node, func(child ast.Node, entering bool) (ast.WalkStatus, error) {
-				if entering && (child.Kind() == ast.KindFencedCodeBlock || child.Kind() == ast.KindCodeBlock || child.Kind() == asttable.KindTable) {
-					wide = true
-					return ast.WalkStop, nil
-				}
-				return ast.WalkContinue, nil
-			})
-			chunk := ast.NewDocument()
-			chunk.AppendChild(chunk, node)
-			target := r.prose.markdown
-			if wide {
-				target = r.markdown
-			}
-			buffer.Reset()
-			if err := target.Renderer().Render(&buffer, data, chunk); err != nil {
-				return "", err
-			}
-			blocks = append(blocks, strings.Trim(r.tables.rules(buffer.String()), "\n"))
-			node = next
-		}
-		return strings.Join(blocks, "\n\n"), nil
-	}
 	err := r.markdown.Renderer().Render(&buffer, data, document)
 	return r.tables.rules(buffer.String()), err
 }

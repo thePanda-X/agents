@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"agents/internal/app"
 	"agents/internal/harness"
@@ -19,15 +20,21 @@ import (
 )
 
 type cached struct {
-	revision uint64
-	width    int
-	text     string
+	revision, seen uint64
+	width, height  int
+	compact        bool
+	expanded       bool
+	at             time.Time
+	role, source   string
+	text, block    string
 }
 
 type Renderer struct {
-	cache    map[*app.Entry]cached
-	markdown *markdownRenderer
-	width    int
+	cache        map[*app.Entry]cached
+	markdown     *markdownRenderer
+	width        int
+	conversation *app.Conversation
+	generation   uint64
 }
 
 func New() *Renderer { return &Renderer{cache: make(map[*app.Entry]cached)} }
@@ -61,7 +68,12 @@ type Options struct {
 }
 
 func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) {
+	if r.conversation != c {
+		clear(r.cache)
+		r.conversation = c
+	}
 	if c == nil || len(c.Entries) == 0 {
+		clear(r.cache)
 		return "", nil
 	}
 	width := max(10, options.Width)
@@ -70,10 +82,11 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 		r.width = width
 		clear(r.cache)
 	}
-	if len(r.cache) > 2048 {
-		clear(r.cache)
-	}
-	var blocks []string
+	// Retain the active transcript's working set, even for long histories. A
+	// global entry-count flush made every refresh reparse all old Markdown.
+	r.generation++
+	defer r.pruneCache()
+	blocks := make([]string, 0, len(c.Entries)*2)
 	var search *regexp.Regexp
 	if options.Search != "" {
 		search = regexp.MustCompile("(?i)" + regexp.QuoteMeta(options.Search))
@@ -154,31 +167,6 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 				frame = -1
 			}
 			block = r.tool(entry.Tool, options.Expanded[entry.ID], options.Terminals, width-2, frame)
-		} else if entry.Role == "user" {
-			// Reserve the gutter (2), left rail (1), and horizontal padding (2).
-			// The first row, including its timestamp, must fit this inner width.
-			innerWidth := width - 5
-			text := lipgloss.Wrap(theme.Clean(entry.Text), min(innerWidth-2, 96), " ")
-			first, rest, _ := strings.Cut(text, "\n")
-			// Style every first-row span with the surface background: nested
-			// foreground/bold resets otherwise expose the terminal background.
-			left := theme.Body.Background(theme.Surface).Bold(true).Render("› " + first)
-			right := theme.Quiet.Background(theme.Surface).Render(entry.At.Format("3:04 PM"))
-			block = left
-			if gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right); gap >= 2 {
-				block += theme.Body.Background(theme.Surface).Render(strings.Repeat(" ", gap)) + right
-			}
-			if rest != "" {
-				block += "\n" + rest
-			}
-			padding := 1
-			if options.Compact {
-				padding = 0
-			}
-			block = theme.Body.Background(theme.Surface).
-				Border(lipgloss.Border{Left: "│"}, false, false, false, true).
-				BorderForeground(theme.Pink).
-				Padding(padding, 1).Width(width - 2).Render(block)
 		} else if entry.Role == "thought" {
 			block = theme.Quiet.Render("◇ Thinking")
 			expanded, overridden := options.Expanded[entry.ID+fmt.Sprint(index)]
@@ -190,23 +178,25 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 				block += theme.Quiet.Render(" · no text supplied by agent")
 				block = lipgloss.Wrap(block, width-2, " ")
 			} else if expanded {
-				block += "\n" + theme.Quiet.Render(lipgloss.Wrap(text, min(width-2, 96), " "))
+				block += "\n" + theme.Quiet.Render(lipgloss.Wrap(text, width-2, " "))
 			} else {
 				block += theme.Quiet.Render(" · collapsed")
 			}
 		} else {
-			cacheEntry, ok := r.cache[entry]
-			if !ok || cacheEntry.revision != entry.Revision || cacheEntry.width != width {
-				text := theme.Clean(entry.Text)
-				if r.markdown != nil {
-					if rendered, err := r.markdown.Render(text); err == nil {
-						text = rendered
-					}
-				}
-				cacheEntry = cached{revision: entry.Revision, width: width, text: strings.Trim(text, "\n")}
-				r.cache[entry] = cacheEntry
+			expanded := false
+			if entry.Role == "user" && LargeText(entry.Text) {
+				expanded = options.Expanded[entry.ID+fmt.Sprint(index)]
 			}
+			cacheEntry := r.message(entry, width, options.Compact, expanded)
 			block = cacheEntry.text
+			if search == nil && !(options.Focused && index == options.Selected) {
+				blocks = append(blocks, cacheEntry.block)
+				lines += cacheEntry.height + 1
+				if options.Compact {
+					lines--
+				}
+				continue
+			}
 		}
 		gutter := ""
 		if search != nil {
@@ -234,6 +224,70 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 		separator = "\n"
 	}
 	return strings.Join(blocks, separator), positions
+}
+
+func (r *Renderer) message(entry *app.Entry, width int, compact, expanded bool) cached {
+	value, ok := r.cache[entry]
+	if !ok || value.revision != entry.Revision || value.width != width ||
+		value.compact != compact || value.expanded != expanded || value.source != entry.Text || value.role != entry.Role || !value.at.Equal(entry.At) {
+		text := ""
+		if entry.Role == "user" {
+			text = renderUser(entry, width, compact, expanded)
+		} else {
+			text = theme.Clean(entry.Text)
+			if rendered, err := r.markdown.Render(text); err == nil {
+				text = rendered
+			}
+			text = strings.Trim(text, "\n")
+		}
+		block := lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(2).Render(""), text)
+		value = cached{revision: entry.Revision, width: width, compact: compact, expanded: expanded, at: entry.At,
+			role: entry.Role, source: entry.Text, text: text, block: block, height: lipgloss.Height(block)}
+	}
+	value.seen = r.generation
+	r.cache[entry] = value
+	return value
+}
+
+func (r *Renderer) pruneCache() {
+	for entry, value := range r.cache {
+		if value.seen != r.generation {
+			delete(r.cache, entry)
+		}
+	}
+}
+
+func renderUser(entry *app.Entry, width int, compact, expanded bool) string {
+	// Reserve the gutter (2), left rail (1), and horizontal padding (2).
+	innerWidth := width - 5
+	text := entry.Text
+	if LargeText(entry.Text) && !expanded {
+		text = fmt.Sprintf("[%d lines · %d bytes · collapsed · Enter expands · o inspects]", strings.Count(entry.Text, "\n")+1, len(entry.Text))
+	} else {
+		text = theme.Clean(text)
+	}
+	text = lipgloss.Wrap(text, innerWidth-2, " ")
+	first, rest, _ := strings.Cut(text, "\n")
+	left := theme.Body.Background(theme.Surface).Bold(true).Render("› " + first)
+	right := ""
+	if !entry.At.IsZero() {
+		right = theme.Quiet.Background(theme.Surface).Render(entry.At.Local().Format("3:04 PM"))
+	}
+	block := left
+	if gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right); right != "" && gap >= 2 {
+		block += theme.Body.Background(theme.Surface).Render(strings.Repeat(" ", gap)) + right
+	}
+	if rest != "" {
+		block += "\n" + rest
+	}
+	padding := 1
+	if compact {
+		padding = 0
+	}
+	return theme.Body.Background(theme.Surface).
+		Border(lipgloss.Border{Left: "│"}, false, false, false, true).
+		BorderForeground(theme.Pink).
+		Padding(padding, 1).Width(width - 2).Render(block)
 }
 
 func highlightSearch(block string, search *regexp.Regexp) string {
