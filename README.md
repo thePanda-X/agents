@@ -59,6 +59,18 @@ you send the first nonempty prompt (text or attachments). Opening and closing th
 client, browsing commands, or choosing `/new` does not create an empty session.
 Unsent text drafts are saved locally without a native session ID. `--resume`,
 `--session`, and selecting a saved session still load that session immediately.
+The `/sessions` (`/resume`) picker groups saved sessions by their last-activity
+date in your local timezone, newest first, with the year included. Sessions with
+missing or invalid agent timestamps appear under **Unknown date**. Agent-reported
+dates are preserved in local session references, without substituting the
+client's resume time for last activity. ACP replay does not supply
+per-message timestamps, so historical prompts omit their time rather than show
+the time you resumed them.
+Loading a saved session does not depend on metadata listing being available:
+if listing fails temporarily, a known workspace reference can still be loaded.
+Authentication failures and failures discovering an unknown workspace remain
+errors; an explicit `--session` ID does not silently assume the launch directory
+when discovery fails.
 To configure before your first task, use `/model`, `/effort`, `/mode`, `/options`,
 or Ctrl+T. These explicitly prepare an empty session, then open the advertised
 controls without sending a prompt. `/model <value>` and `/effort <value>` also
@@ -75,6 +87,29 @@ Creation errors preserve your text and attachments for retry. Text edited during
 creation stays in the composer as a separate draft. Ctrl+C (or `/cancel`) cancels
 the queued first send; an already-started native creation may still leave an
 empty session, but its prompt will not be sent.
+
+### Default agent permissions
+
+Built-in harnesses start with their least restrictive available mode, including
+when creating, loading, or resuming a session:
+
+- **OpenCode:** `build`, with wildcard `allow` rules supplied to the child process
+  through `OPENCODE_CONFIG_CONTENT`, including a build-specific rule. No global
+  or project configuration files are changed. Explicit inline configuration in
+  the environment or launch settings is preserved instead of replaced.
+- **Claude Code:** `bypassPermissions` when advertised by the bridge, otherwise
+  `acceptEdits` when available. Managed restrictions remain the bridge's
+  responsibility; unavailable modes are never requested.
+- **Pi:** its native unrestricted tool execution; no approval flags are needed.
+
+Use `/mode` to choose a different mode during a session. Creation, reload, and
+reconnection reapply the defaults before a prompt can be sent. Custom ACP agents
+retain their own defaults; configure native permission flags in their launch
+settings. Permission requests still emitted by any harness require your answer;
+Agents does not automatically approve them. These permissive defaults let agents
+edit files and run commands without routine confirmation: use trusted workspaces.
+
+### OpenCode
 
 For OpenCode, install OpenCode V2 and sign in using `opencode auth login` first.
 Agents launches `opencode acp`, which owns a private OpenCode server. It does
@@ -161,11 +196,13 @@ other features depends on what the connected bridge advertises.
 | Ctrl+S | Session history |
 | Ctrl+N | New conversation |
 | Ctrl+F | Attach workspace file (images are capability-gated) |
-| Ctrl+E | External draft editor using `$VISUAL` / `$EDITOR` |
+| Ctrl+G | External draft editor using `$VISUAL` / `$EDITOR` |
+| Ctrl+E | Move the composer cursor to the end of the current line |
 | Ctrl+T | Cycle advertised thinking/effort levels; `/thoughts` toggles reasoning visibility |
 | Ctrl+X | Toggle compact / comfortable layout |
 | Ctrl+V | Paste a clipboard image into the composer, or fall back to text paste |
-| Ctrl+Y | Copy last response using terminal OSC52 clipboard support |
+| Alt+P | Review or remove collapsed pasted text blocks without replacing the draft |
+| Ctrl+Y | Copy highlighted text, or the last response, using terminal OSC52 clipboard support |
 | Ctrl+C | Cancel turn, dismiss overlay, or clear draft |
 | Ctrl+D | Quit; confirm again while a turn is active |
 | Ctrl+R | Search prompt history (never sends automatically) |
@@ -177,6 +214,26 @@ In transcript focus, use j/k to scroll by visual line, arrows to select entries,
 or collapse the selected tool/thinking block, and y to copy. Selection follows
 the reading line as you scroll with the keyboard, including at the top/bottom of
 the viewport. Individual thinking folds override the global reasoning preference.
+
+With mouse support enabled in `/settings`, left-drag response text to highlight
+it, then **right-click** in the transcript or press **y** to copy just that text.
+Ctrl+Y and `/copy` (`/yank`) also prefer highlighted text. **Esc** or a new click
+clears highlighting; typing in the composer resumes normal draft editing.
+Highlighted text uses a muted plum background with light text; Terminal default
+appearance uses reverse video so selections stay visible without application colors.
+Selections copy rendered text without colors or the transcript gutter, preserving
+visible line breaks and code indentation. Scroll with the wheel to select across
+pages. Highlighting pauses automatic following and clears when resizing or
+changing layout would invalidate the selected text. A green, short-lived copy
+indicator appears above the statusline; OSC52 requires terminal clipboard
+support and does not acknowledge whether the clipboard write was accepted.
+
+With mouse support enabled, **left-click a link** in the transcript to open it
+in your default browser. Markdown link labels and URLs are clickable, including
+wrapped Markdown links; dragging over a link selects text instead of opening it.
+Only HTTP/HTTPS URLs without embedded credentials are opened. The browser opens
+on the machine running Agents (not automatically on your laptop over SSH).
+
 Scrolling away from the bottom disables automatic
 following until you return. Plans, reported changes, settings, authentication,
 and harness selection are available through the command palette.
@@ -187,7 +244,7 @@ The statusline keeps connection and turn state visible; short-lived notification
 appear separately above it. `/diagnostics` opens full error details and agent setup
 instructions. Failed file, skill, and session pickers offer Enter to retry.
 
-The composer grows for both soft-wrapped text and explicit newlines, up to eight
+The composer grows for both soft-wrapped text and explicit newlines, up to four
 visible rows (less in small terminals). Longer drafts scroll internally and are
 not restricted to the visible row count. Pasting multiline text does not send it.
 Alt+Enter, Ctrl+J, and enhanced-terminal Shift+Enter insert newlines; Enter sends.
@@ -251,9 +308,10 @@ around sent user messages to separate them from replies, thinking, and tool
 activity. Sent messages also have a persistent pink left rail in both layouts.
 Tab into browse mode
 reveals each entry for inspection. Failed tools, active tools, and explicitly
-expanded tools stay visible. Prose blocks wrap at 96 columns on wide terminals,
-including in mixed responses; blocks containing code or tables retain the
-available width.
+expanded tools stay visible. Responses, sent prompts, and expanded thinking wrap
+to the available terminal width, reserving only the transcript gutter and message
+padding. Prose, code, and tables use the same width budget, including in mixed
+responses and after resizing.
 Compact mode keeps one blank line between tool/thinking runs and model responses.
 
 Ctrl+C dismisses an overlay or cancels an interaction before stopping a running
@@ -287,6 +345,38 @@ an entry before advancing to the next/previous matching entry.
 Markdown tables use bold headers, padded columns, and horizontal rules between
 data rows. Padding tightens on narrow terminals while long cells still wrap;
 rules separate logical rows, not individual wrapped lines.
+
+### Large text pastes
+
+Pastes of **40 logical lines or 4 KiB** are inserted at the cursor as compact
+markers such as `[Paste #1: 120 lines]`. The complete text remains in the draft;
+markers are never sent to the agent. Pasting never sends automatically. Smaller
+blocks remain editable inline, and CRLF/CR newlines are normalized to LF. Large
+blocks retain tab indentation; terminal control sequences are removed.
+
+Press **Alt+P** (or choose **Review pasted text blocks** in the command palette)
+to inspect or delete individual blocks while preserving surrounding text. `/pastes`
+opens the same picker. Remap this shortcut with the `pastes` keybinding. Picker
+previews are limited to 8 KiB, and the detail preview to 64 KiB, with an explicit
+truncation notice. **Ctrl+G** / `/editor` opens the complete expanded draft for
+editing after closing the picker. Edited large drafts are compacted again.
+
+Markers behave as whole blocks: left/right navigation skips their interior,
+Backspace/Delete removes the entire touched block, and typing inside a marker
+inserts text after it. Ctrl+C and `/restore`, interrupted submission recovery,
+prompt history, session switching, and autosave retain the complete text rather
+than placeholders. Pasted text is saved as part of the ordinary text draft,
+unlike image attachment bytes, which remain in memory only.
+
+Expanded drafts are limited to **8 MiB** and **128 collapsed blocks**. A paste
+that would exceed the byte, block, or visible-composer limit is rejected in full
+with a notice; the existing draft is not silently truncated. Clipboard text reads
+are also bounded to 8 MiB and time out after eight seconds. If the draft, cursor,
+or conversation changes during a clipboard read, its late result is not inserted.
+
+Long sent user messages are folded in the transcript as well. In browse mode,
+Enter expands or collapses them; `o` inspects the complete message, and copying,
+history, and agent context still use the original text.
 
 ### Paste images
 
@@ -369,11 +459,12 @@ You can also type or paste a complete command and run it directly.
 | `/plan`, `/changes` | Inspect the reported plan or diffs |
 | `/attach [path]`, `/detach` | Attach a file (or browse files), or remove pending attachments |
 | `/attachments` | Inspect pending attachments or remove individual ones |
-| `/thoughts`, `/copy`, `/editor` | Toggle reasoning, copy the last response, or compose in your editor |
+| `/thoughts`, `/copy`, `/editor` | Toggle reasoning, copy highlighted text (or the last response), or compose in your editor |
 | `/search`, `/history`, `/inspect`, `/restore` | Search transcript/history, inspect the selected entry, or restore a cleared draft |
 | `/recover`, `/diagnostics` | Restore an interrupted submission for review, or inspect connection/error details |
 | `/skills [query]`, `/skill [query]` | Browse installed skills and stage a loading request |
 | `/paste-image` | Attach an image from the local desktop clipboard |
+| `/pastes` | Review or remove collapsed pasted text blocks |
 | `/cancel`, `/reconnect`, `/quit` | Cancel work, reconnect, or quit with active-turn confirmation |
 | `/agent [command [args]]` | Browse agent commands, or send one directly to the harness |
 
@@ -520,6 +611,18 @@ override. Files are atomically replaced with private permissions. The agent's
 storage remains authoritative for session history. The demo does not persist its
 conversations. Credentials remain with the harness.
 
+Concurrent clients serialize saves and merge only their changed settings,
+workspace references, and individual drafts. Saving in one project does not
+erase another client's drafts. Concurrent edits to the same setting or draft
+use the last save; this is not collaborative draft editing. Autosaves acknowledge
+successful writes only and retry failures automatically, with a delay increasing
+from one second to at most 30 seconds, without requiring another edit.
+
+Failed session setup releases provisional filesystem handles and command
+terminals. An unsuccessful reload preserves the client's previously authorized
+roots and existing terminals. This cleanup does not undo agent context or edits,
+or delete native conversation history.
+
 The optional `mcpServers` settings field accepts ACP's standard session MCP
 configuration. Server commands must be absolute paths and transports must be
 supported by the connected agent. Do not put credentials in this file.
@@ -555,6 +658,13 @@ internal/storage         preferences, drafts, and recent-session references
 
 ```sh
 make check
+```
+
+Transcript rendering benchmarks include cached histories of 100, 1000, and 5000
+entries:
+
+```sh
+go test ./internal/tui/transcript -run '^$' -bench BenchmarkCachedTranscriptRefresh -benchmem
 ```
 
 An optional live integration check validates initialization, session options,
