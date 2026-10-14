@@ -24,7 +24,7 @@ func TestComposerGrowsForSoftWrapAndShrinksAfterDeletion(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 44, Height: 24})
 	text := strings.Repeat("界🙂 words ", 16) + "END"
 	m.Update(tea.PasteMsg{Content: text})
-	if m.input.LineCount() != 1 || m.input.Height() <= 1 || m.input.Height() > 8 {
+	if m.input.LineCount() != 1 || m.input.Height() <= 1 || m.input.Height() > 4 {
 		t.Fatalf("soft-wrap sizing: logical=%d visual=%d", m.input.LineCount(), m.input.Height())
 	}
 	if m.input.Value() != text || !strings.Contains(ansi.Strip(m.input.View()), "END") {
@@ -112,7 +112,7 @@ func TestComposerAllowsMoreNewlinesThanVisibleRows(t *testing.T) {
 		if m.input.LineCount() != 21 {
 			t.Fatalf("%s truncated newlines at %d", newline.String(), m.input.LineCount())
 		}
-		if m.input.Height() != 8 || m.input.ScrollYOffset() == 0 {
+		if m.input.Height() != 4 || m.input.ScrollYOffset() == 0 {
 			t.Fatal("long draft does not scroll within bounded composer")
 		}
 		if m.submitting {
@@ -135,11 +135,105 @@ func TestComposerResizePreservesDraftCursorAndFitsLayouts(t *testing.T) {
 			if m.input.Value() != text || m.input.Line() != line || m.input.Column() != column {
 				t.Fatal("resize moved cursor or changed draft")
 			}
+			if m.input.Height() > 4 {
+				t.Fatal("resizing exceeded the four-row composer limit")
+			}
 			if width, height := lipgloss.Size(m.View().Content); width > size[0] || height > size[1] {
 				t.Fatalf("layout exceeds terminal %v", size)
 			}
 			if !strings.Contains(ansi.Strip(m.View().Content), "COMPOSE") {
 				t.Fatalf("statusline clipped at %v compact=%v input=%d viewport=%d:\n%s", size, compact, m.input.Height(), m.viewport.Height(), ansi.Strip(m.View().Content))
+			}
+		}
+	}
+}
+
+func TestComposerGrowsToFourRowsThenScrolls(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		m := testModel(t)
+		m.opts.Settings.Compact = compact
+		m.input.Focus()
+		m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+		for rows := 1; rows <= 6; rows++ {
+			if rows > 1 {
+				m.Update(ctrl('j'))
+			}
+			m.Update(letter('x'))
+			if m.input.Height() != min(rows, 4) || m.input.LineCount() != rows {
+				t.Fatalf("composer rows=%d: height=%d logical=%d", rows, m.input.Height(), m.input.LineCount())
+			}
+			if m.input.Value() != strings.Repeat("x\n", rows-1)+"x" {
+				t.Fatal("four-row limit truncated a longer draft")
+			}
+		}
+		if m.input.ScrollYOffset() == 0 || !strings.Contains(ansi.Strip(m.input.View()), "x") {
+			t.Fatal("longer draft did not scroll inside the four-row composer")
+		}
+		if width, height := lipgloss.Size(m.View().Content); width > 80 || height > 24 {
+			t.Fatal("four-row composer overflowed the terminal")
+		}
+		m.input.SetValue("short")
+		m.resize()
+		if m.input.Height() != 1 {
+			t.Fatal("composer did not shrink back to one row")
+		}
+	}
+}
+
+func TestComposerWrappedCursorStaysVisibleAcrossResize(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		m := testModel(t)
+		m.opts.Settings.Compact = compact
+		m.input.Focus()
+		text := strings.Repeat("界🙂 wrapped words ", 30) + "END"
+		m.Update(tea.PasteMsg{Content: text})
+		line, column := m.input.Line(), m.input.Column()
+		for _, focused := range []bool{true, false} {
+			if !focused {
+				m.input.Blur()
+			}
+			for _, size := range [][2]int{{120, 40}, {44, 24}, {32, 12}, {80, 24}} {
+				m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+				if m.input.Height() > 4 || !strings.Contains(ansi.Strip(m.input.View()), "END") {
+					t.Fatalf("wrapped cursor hidden after resize to %v: height=%d offset=%d", size, m.input.Height(), m.input.ScrollYOffset())
+				}
+				if m.input.Value() != text || m.input.Line() != line || m.input.Column() != column || m.input.Focused() != focused {
+					t.Fatal("viewport refresh changed the draft, cursor or focus")
+				}
+			}
+		}
+	}
+}
+
+func TestResponseUsesTerminalWidthAfterResizeAndStreaming(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		m := testModel(t)
+		m.opts.Settings.Compact = compact
+		m.input.SetValue("keep my draft")
+		m.Update(eventMsg(harness.Event{Kind: harness.Message, Generation: 1, SessionID: "s", Chunk: harness.MessageChunk{ID: "reply", Role: "assistant", Text: strings.Repeat("response 界 words ", 100)}}))
+		for _, width := range []int{40, 160, 240, 60, 160} {
+			m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+			m.Update(tickMsg{})
+			for _, focused := range []bool{false, true} {
+				m.setTranscriptFocus(focused)
+				widest := 0
+				for _, line := range strings.Split(ansi.Strip(m.viewport.GetContent()), "\n") {
+					if got := ansi.StringWidth(line); got > m.viewport.Width() {
+						t.Fatalf("response exceeds viewport after resize to %d columns", width)
+					}
+					widest = max(widest, ansi.StringWidth(strings.TrimRight(line, " ")))
+				}
+				if widest < width-16 {
+					t.Fatalf("response does not fill terminal: content=%d terminal=%d compact=%v focused=%v", widest, width, compact, focused)
+				}
+				if w, h := lipgloss.Size(m.View().Content); w > width || h > 30 {
+					t.Fatal("response layout exceeds terminal")
+				}
+			}
+			m.Update(eventMsg(harness.Event{Kind: harness.Message, Generation: 1, SessionID: "s", Chunk: harness.MessageChunk{ID: "reply", Role: "assistant", Text: " STREAMED"}}))
+			m.Update(tickMsg{})
+			if !strings.Contains(ansi.Strip(m.viewport.GetContent()), "STREAMED") || m.input.Value() != "keep my draft" {
+				t.Fatal("reflow lost streamed text or changed the draft")
 			}
 		}
 	}

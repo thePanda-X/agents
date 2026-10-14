@@ -53,7 +53,6 @@ type editorMsg struct {
 	err  error
 }
 type authMsg struct{ err error }
-type saveMsg struct{ err error }
 type urlMsg struct {
 	interaction *harness.Interaction
 	err         error
@@ -72,6 +71,8 @@ type Model struct {
 	browseLine                                             int
 	browseVisited                                          bool
 	positions                                              []int
+	transcriptContent                                      string
+	textSelection                                          *textSelection
 	expanded                                               map[string]bool
 	list                                                   *overlays.List
 	overlay, infoTitle                                     string
@@ -81,6 +82,8 @@ type Model struct {
 	attachments                                            []harness.Attachment
 	clipboardGeneration                                    uint64
 	pastingImage                                           bool
+	pastingText                                            bool
+	nextPasteID                                            uint64
 	creatingSession                                        bool
 	pendingFirstPrompt                                     *harness.Prompt
 	pendingFirstDraft                                      string
@@ -94,6 +97,11 @@ type Model struct {
 	dirty, unseen, submitting, sessionPending, demoStarted bool
 	lastSavedDraft                                         string
 	lastSave                                               time.Time
+	savePending                                            uint64
+	saveFailures                                           int
+	saveRetry                                              bool
+	saveRetryAt                                            time.Time
+	saveError                                              error
 	quitAt                                                 time.Time
 	saveRevision                                           uint64
 	urlReviewed, urlOpening                                bool
@@ -147,7 +155,7 @@ func New(options Options) *Model {
 	workspace := options.Snapshot.Workspaces[storage.Key(options.Agent.Workspace, options.Descriptor.ID)]
 	m.hasWorked = workspace.Session.ID != ""
 	if options.Restore == nil {
-		m.input.SetValue(workspace.Drafts[""])
+		m.setDraftText(workspace.Drafts[""])
 		m.lastSavedDraft = m.input.Value()
 	}
 	return m
@@ -175,20 +183,13 @@ func (m *Model) awaitEvent() tea.Cmd {
 	}
 }
 
-func (m *Model) connect(restore *harness.SessionInfo) tea.Cmd {
-	controller, descriptor, options := m.opts.Controller, m.opts.Descriptor, m.opts.Agent
-	m.sessionPending = restore != nil
-	m.creatingSession, m.pendingFirstPrompt = false, nil
-	m.effortPending = false
-	m.pendingSetup = nil
-	m.configPending = false
-	return command(func() { controller.Connect(descriptor, options, restore) })
-}
-
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		if m.width != msg.Width || m.height != msg.Height {
+			m.clearTextSelection()
+		}
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
 		m.dirty = true
@@ -202,7 +203,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.Kind == harness.SessionReady && e.Generation == m.state.Generation && oldID != e.Session.ID {
 			m.stashDraft()
 			if previous := m.state.Active(); previous != nil {
-				previous.Draft, previous.DraftLoaded = m.input.Value(), true
+				previous.Draft, previous.DraftLoaded = m.draftText(), true
 			} else if !m.creatingSession {
 				m.rememberLocalDraft()
 			}
@@ -243,6 +244,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				creating := m.creatingSession
 				prompt, draft := m.pendingFirstPrompt, m.pendingFirstDraft
 				m.creatingSession, m.pendingFirstPrompt = false, nil
+				m.pendingFirstDraft = ""
 				m.sessionPending = false
 				if creating {
 					if buffer := m.drafts[oldKey]; buffer != nil {
@@ -253,7 +255,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if oldID != m.state.ActiveID || e.Session.ID != m.displayedSessionID {
 					if !creating {
 						m.clipboardGeneration++
-						m.pastingImage = false
+						m.pastingImage, m.pastingText = false, false
 						m.restoreAttachments()
 					}
 					m.history = nil
@@ -305,6 +307,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.pendingSetup = nil
 					m.sessionPending, m.submitting = false, false
 					m.creatingSession, m.pendingFirstPrompt = false, nil
+					m.pendingFirstDraft = ""
 				}
 			case harness.TurnStarted:
 				m.submitting = false
@@ -322,6 +325,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case harness.SessionsListed:
 				if m.overlay == "sessions" {
+					m.populateSessions()
+				}
+			case harness.Metadata:
+				if m.overlay == "sessions" && !m.list.Loading {
 					m.populateSessions()
 				}
 			case harness.SessionDeleted:
@@ -367,9 +374,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dirty = false
 		}
 		m.syncInteraction()
-		if m.input.Value() != m.lastSavedDraft && time.Since(m.lastSave) > time.Second {
-			cmds = append(cmds, m.save())
-		}
+		cmds = append(cmds, m.autosave(time.Time(msg)))
 		cmds = append(cmds, tick())
 	case branchMsg:
 		m.branchPending = false
@@ -409,11 +414,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.receiveAttachment(msg)
 	case clipboardImageMsg:
 		cmds = append(cmds, m.receiveClipboardImage(msg))
+	case clipboardTextMsg:
+		m.receiveClipboardText(msg)
+	case tea.PasteMsg:
+		if m.interaction != nil && m.form != nil {
+			cmds = append(cmds, m.form.Update(msg))
+		} else if m.list != nil {
+			cmds = append(cmds, m.list.Update(msg))
+		} else if m.overlay == "" && !m.focusedTranscript {
+			m.receiveTextPaste(msg.Content)
+		}
 	case editorMsg:
 		if msg.err != nil {
 			m.state.LastError = msg.err
 		} else {
-			m.input.SetValue(msg.text)
+			m.setDraftText(msg.text)
 		}
 	case authMsg:
 		if msg.err != nil {
@@ -426,8 +441,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state.LastError = msg.err
 		}
 	case saveMsg:
+		m.receiveSave(msg)
+	case linkOpenedMsg:
 		if msg.err != nil {
-			m.state.LastError = fmt.Errorf("save client state: %w", msg.err)
+			m.state.LastError = fmt.Errorf("could not open link: %w", msg.err)
+		} else {
+			m.state.Notice = "Opened link in browser"
 		}
 	case urlMsg:
 		m.urlOpening = false
@@ -439,6 +458,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyPressMsg:
 		cmds = append(cmds, m.handleKey(msg))
+	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+		cmds = append(cmds, m.handleMouse(msg.(tea.MouseMsg)))
 	case tea.MouseWheelMsg:
 		if m.overlay == "info" {
 			var cmd tea.Cmd
@@ -448,6 +469,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
+			if m.textSelection != nil && m.textSelection.dragging {
+				m.extendTextSelection(msg.Mouse())
+			}
 			if m.viewport.AtBottom() {
 				m.unseen = false
 			}
@@ -459,10 +483,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.list.Update(msg))
 		} else if !m.focusedTranscript {
 			var cmd tea.Cmd
+			before := m.input.Value()
 			m.input, cmd = m.input.Update(msg)
+			if m.input.Value() != before {
+				m.clearTextSelection()
+			}
 			cmds = append(cmds, cmd)
 		}
 	}
+	if m.textSelection != nil && (m.overlay != "" || m.interaction != nil) {
+		m.textSelection.dragging = false
+	}
+	m.syncPastes()
 	m.resize()
 	m.trackFeedback()
 	if m.overlay == "files" {
@@ -477,8 +509,12 @@ func (m *Model) resize() {
 	if m.opts.Settings.Compact {
 		chrome = 6
 	}
+	previousWidth := m.input.Width()
 	m.input.SetWidth(max(4, width-4))
-	m.input.SetHeight(min(m.input.Height(), max(1, min(8, m.height/3, m.height-chrome-1-boolInt(len(m.attachments) > 0)))))
+	if m.input.Width() != previousWidth {
+		m.syncComposerViewport()
+	}
+	m.input.SetHeight(min(m.input.Height(), max(1, min(4, m.height/3, m.height-chrome-1-boolInt(len(m.attachments) > 0)))))
 	newHeight := max(1, m.height-m.input.Height()-chrome-boolInt(len(m.attachments) > 0))
 	if m.viewport.Width() != width || m.viewport.Height() != newHeight {
 		m.dirty = true
@@ -498,6 +534,18 @@ func (m *Model) resize() {
 	}
 }
 
+// SetValue and width changes recalculate height before refreshing Bubbles'
+// viewport content. Synchronize it before clamping height so scrolling uses the
+// new wrapped rows, not an empty or differently sized previous render.
+func (m *Model) syncComposerViewport() {
+	focused := m.input.Focused()
+	m.input.Focus()
+	m.input, _ = m.input.Update(nil)
+	if !focused {
+		m.input.Blur()
+	}
+}
+
 func boolInt(v bool) int {
 	if v {
 		return 1
@@ -506,10 +554,12 @@ func boolInt(v bool) int {
 }
 
 func (m *Model) refresh() {
-	follow := m.viewport.AtBottom()
+	follow := m.viewport.AtBottom() && m.textSelection == nil
 	text, positions := m.renderer.Render(m.state.Active(), transcript.Options{Width: m.viewport.Width(), Selected: m.selected, Focused: m.focusedTranscript, Thoughts: m.opts.Settings.ShowThoughts, Compact: m.opts.Settings.Compact, Search: m.searchQuery, SearchOccurrence: m.searchOccurrence, Expanded: m.expanded, Terminals: m.state.TerminalOutputs, SpinnerFrame: m.toolSpinnerFrame, ReducedMotion: m.opts.Settings.ReducedMotion})
 	m.positions = positions
-	m.viewport.SetContent(text)
+	m.validateTextSelection(text)
+	m.transcriptContent = text
+	m.setTranscriptContent()
 	if follow && !m.focusedTranscript {
 		m.viewport.GotoBottom()
 		m.unseen = false
@@ -517,7 +567,7 @@ func (m *Model) refresh() {
 }
 
 func (m *Model) send() tea.Cmd {
-	text := strings.TrimSpace(m.input.Value())
+	text := expandPastes(strings.TrimSpace(m.input.Value()), m.currentDraft().Pastes)
 	if cmd, handled := m.handleSlashCommand(text); handled {
 		return cmd
 	}
@@ -529,8 +579,8 @@ func (m *Model) sendPrompt(text string) tea.Cmd {
 		m.state.Notice = "Applying session options · draft preserved · send when configuration finishes"
 		return nil
 	}
-	if m.pastingImage {
-		m.state.Notice = "Reading clipboard · draft preserved · send when the image is attached"
+	if m.pastingImage || m.pastingText {
+		m.state.Notice = "Reading clipboard · draft preserved · send when the paste is ready"
 		return nil
 	}
 	if m.currentDraft().Pending > 0 {
@@ -552,17 +602,21 @@ func (m *Model) sendPrompt(text string) tea.Cmd {
 		}
 		return nil
 	}
-	if text == "" && len(m.attachments) == 0 {
+	if strings.TrimSpace(text) == "" && len(m.attachments) == 0 {
+		return nil
+	}
+	if len(text) > maxDraftBytes {
+		m.state.Notice = "Prompt exceeds 8 MiB · draft preserved"
 		return nil
 	}
 	prompt := harness.Prompt{Text: text, Attachments: append([]harness.Attachment(nil), m.attachments...)}
 	if c == nil {
-		m.pendingFirstPrompt, m.pendingFirstDraft = &prompt, m.input.Value()
+		m.pendingFirstPrompt, m.pendingFirstDraft = &prompt, m.draftText()
 		m.sessionPending, m.creatingSession = true, true
 		m.state.Notice = "Creating conversation · draft preserved · Ctrl+C to cancel the first send"
 		return command(m.opts.Controller.NewSession)
 	}
-	return m.submitPrompt(prompt, m.input.Value())
+	return m.submitPrompt(prompt, m.draftText())
 }
 
 func (m *Model) submitPrompt(prompt harness.Prompt, draft string) tea.Cmd {
@@ -573,188 +627,14 @@ func (m *Model) submitPrompt(prompt harness.Prompt, draft string) tea.Cmd {
 	buffer.Submission = &submissionSnapshot{Draft: draft, Prompt: harness.Prompt{Text: prompt.Text, Attachments: append([]harness.Attachment(nil), prompt.Attachments...)}}
 	m.history = append(m.history, prompt.Text)
 	m.historyIndex = len(m.history)
-	if m.input.Value() == draft {
+	if m.draftText() == draft {
 		m.input.Reset()
 	}
-	c.Draft, c.DraftLoaded = m.input.Value(), true
+	c.Draft, c.DraftLoaded = m.draftText(), true
 	m.attachments = m.attachments[min(len(prompt.Attachments), len(m.attachments)):]
 	m.stashDraft()
 	m.focusedTranscript = false
 	m.input.Focus()
 	m.viewport.GotoBottom()
 	return command(func() { controller.Prompt(id, prompt) })
-}
-
-func (m *Model) restoreDraft() {
-	c := m.state.Active()
-	if c == nil {
-		return
-	}
-	if !c.DraftLoaded {
-		persisted := m.opts.Snapshot.Workspaces[storage.Key(c.Info.Workspace, m.opts.Descriptor.ID)]
-		c.Draft = persisted.Drafts[c.Info.ID]
-		c.DraftLoaded = true
-	}
-	m.input.SetValue(c.Draft)
-	m.lastSavedDraft = c.Draft
-}
-
-func (m *Model) Snapshot() (storage.Settings, storage.Snapshot) {
-	m.stashDraft()
-	if c := m.state.Active(); c != nil {
-		c.Draft = m.input.Value()
-		c.DraftLoaded = true
-	}
-	m.saveRevision++
-	snapshot := storage.Snapshot{Version: 1, Revision: m.saveRevision, Workspaces: make(map[string]storage.WorkspaceState)}
-	for key, workspace := range m.opts.Snapshot.Workspaces {
-		snapshot.Workspaces[key] = workspace
-	}
-	if !m.opts.Demo {
-		for _, c := range m.state.Conversations {
-			if c.Info.Workspace == "" {
-				continue
-			}
-			key := storage.Key(c.Info.Workspace, m.opts.Descriptor.ID)
-			workspace := snapshot.Workspaces[key]
-			drafts := make(map[string]string)
-			for id, draft := range workspace.Drafts {
-				drafts[id] = draft
-			}
-			if c.Draft != "" {
-				drafts[c.Info.ID] = c.Draft
-			} else {
-				delete(drafts, c.Info.ID)
-			}
-			workspace.Drafts = drafts
-			if c.Info.ID == m.state.ActiveID {
-				workspace.Session = c.Info
-			}
-			snapshot.Workspaces[key] = workspace
-		}
-		if m.state.Active() == nil {
-			key := storage.Key(m.opts.Agent.Workspace, m.opts.Descriptor.ID)
-			workspace := snapshot.Workspaces[key]
-			drafts := make(map[string]string)
-			for id, draft := range workspace.Drafts {
-				drafts[id] = draft
-			}
-			if m.input.Value() == "" {
-				delete(drafts, "")
-			} else {
-				drafts[""] = m.input.Value()
-			}
-			workspace.Drafts = drafts
-			snapshot.Workspaces[key] = workspace
-		}
-	}
-	return m.opts.Settings, snapshot
-}
-
-func (m *Model) save() tea.Cmd {
-	if m.opts.Store == nil {
-		return nil
-	}
-	settings, snapshot := m.Snapshot()
-	m.opts.Snapshot = snapshot
-	m.lastSavedDraft, m.lastSave = m.input.Value(), time.Now()
-	store := m.opts.Store
-	return func() tea.Msg { return saveMsg{err: store.Save(settings, snapshot)} }
-}
-
-func (m *Model) forgetSession(id string) {
-	for key, workspace := range m.opts.Snapshot.Workspaces {
-		drafts := make(map[string]string)
-		for draftID, draft := range workspace.Drafts {
-			if draftID != id {
-				drafts[draftID] = draft
-			}
-		}
-		workspace.Drafts = drafts
-		if workspace.Session.ID == id {
-			workspace.Session = harness.SessionInfo{}
-		}
-		m.opts.Snapshot.Workspaces[key] = workspace
-	}
-}
-
-func (m *Model) reconnect() tea.Cmd {
-	m.stashDraft()
-	m.finishSubmission(true)
-	var restore *harness.SessionInfo
-	if c := m.state.Active(); c != nil {
-		c.Draft = m.input.Value()
-		c.DraftLoaded = true
-		info := c.Info
-		restore = &info
-	}
-	return m.connect(restore)
-}
-
-func (m *Model) newSession() tea.Cmd {
-	if m.sessionPending {
-		return nil
-	}
-	if c := m.state.Active(); c != nil {
-		if c.Busy {
-			m.state.Notice = "Cancel the active turn before opening another session."
-			return nil
-		}
-		c.Draft = m.input.Value()
-		c.DraftLoaded = true
-		m.stashDraft()
-	} else {
-		m.state.Notice = "New conversation · send a prompt to create the session"
-		return nil
-	}
-	m.state.ActiveID, m.displayedSessionID = "", ""
-	m.input.Reset()
-	m.attachments, m.history, m.positions = nil, nil, nil
-	m.clipboardGeneration++
-	m.pastingImage = false
-	m.restoreLocalBuffer()
-	m.historyIndex, m.selected, m.browseLine = 0, 0, 0
-	m.browseVisited = false
-	m.searchQuery, m.browsePrefix = "", ""
-	m.dirty = true
-	m.state.Notice = "New conversation · send a prompt to create the session"
-	return m.setTranscriptFocus(false)
-}
-
-func (m *Model) rememberLocalDraft() {
-	key := storage.Key(m.opts.Agent.Workspace, m.opts.Descriptor.ID)
-	workspace := m.opts.Snapshot.Workspaces[key]
-	drafts := make(map[string]string)
-	for id, draft := range workspace.Drafts {
-		drafts[id] = draft
-	}
-	if m.input.Value() == "" {
-		delete(drafts, "")
-	} else {
-		drafts[""] = m.input.Value()
-	}
-	workspace.Drafts = drafts
-	if m.opts.Snapshot.Workspaces == nil {
-		m.opts.Snapshot.Workspaces = make(map[string]storage.WorkspaceState)
-	}
-	m.opts.Snapshot.Workspaces[key] = workspace
-}
-
-func (m *Model) clearLocalDraft() {
-	if m.opts.Demo {
-		return
-	}
-	key := storage.Key(m.opts.Agent.Workspace, m.opts.Descriptor.ID)
-	workspace := m.opts.Snapshot.Workspaces[key]
-	drafts := make(map[string]string)
-	for id, draft := range workspace.Drafts {
-		if id != "" {
-			drafts[id] = draft
-		}
-	}
-	workspace.Drafts = drafts
-	if m.opts.Snapshot.Workspaces == nil {
-		m.opts.Snapshot.Workspaces = make(map[string]storage.WorkspaceState)
-	}
-	m.opts.Snapshot.Workspaces[key] = workspace
 }

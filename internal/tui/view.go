@@ -282,5 +282,22 @@ func (m *Model) footer(width int) string {
 			hints = "j/k · i compose"
 		}
 	}
+	buffer := m.drafts[m.draftKey()]
+	if buffer != nil && len(buffer.Pastes) > 0 && !m.focusedTranscript && m.overlay == "" && m.list == nil && m.interaction == nil {
+		hints = enter + " · " + m.binding("pastes") + " pastes · " + m.binding("editor") + " edit"
+		if width < 70 {
+			hints = enter + " · " + m.binding("pastes") + " pastes"
+		}
+		if width < 40 {
+			hints = m.binding("pastes") + " pastes"
+		}
+	}
+	if m.hasTextSelection() && m.overlay == "" && m.list == nil && m.interaction == nil {
+		left = theme.Accent.Bold(true).Render("SELECT")
+		hints = "y / right-click copy · Esc clear"
+		if width < 50 {
+			hints = "y copy · Esc clear"
+		}
+	}
 	return theme.Line(left, theme.Quiet.Render(hints), width)
 }

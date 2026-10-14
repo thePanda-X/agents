@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
-	"time"
+	"unicode/utf8"
 
 	"agents/internal/clientservices"
 	"agents/internal/harness"
@@ -206,8 +206,6 @@ func (m *Model) answer(i *harness.Interaction, decision harness.Decision) {
 
 func openURL(ctx context.Context, i *harness.Interaction) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
 		target, err := url.Parse(i.URL)
 		if err != nil {
 			return urlMsg{i, err}
@@ -219,16 +217,10 @@ func openURL(ctx context.Context, i *harness.Interaction) tea.Cmd {
 		if target.Host == "" || target.User != nil || (target.Scheme != "https" && !(target.Scheme == "http" && loopback)) {
 			return urlMsg{i, fmt.Errorf("URL must use HTTPS (or localhost HTTP), without embedded credentials")}
 		}
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			cmd = exec.CommandContext(ctx, "open", i.URL)
-		case "windows":
-			cmd = exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", i.URL)
-		default:
-			cmd = exec.CommandContext(ctx, "xdg-open", i.URL)
+		if err := validateWebURL(i.URL); err != nil {
+			return urlMsg{i, err}
 		}
-		return urlMsg{i, cmd.Run()}
+		return urlMsg{i, launchBrowser(ctx, i.URL)}
 	}
 }
 
@@ -261,7 +253,7 @@ func (m *Model) externalEditor() tea.Cmd {
 		return nil
 	}
 	path := file.Name()
-	if _, err := file.WriteString(m.input.Value()); err != nil {
+	if _, err := file.WriteString(m.draftText()); err != nil {
 		file.Close()
 		os.Remove(path)
 		m.state.LastError = err
@@ -278,10 +270,22 @@ func (m *Model) externalEditor() tea.Cmd {
 		if err != nil {
 			return editorMsg{err: err}
 		}
-		data, err := os.ReadFile(path)
-		if len(data) > 128*1024 {
-			return editorMsg{err: fmt.Errorf("edited draft exceeds 128 KiB")}
-		}
-		return editorMsg{text: theme.Clean(string(data)), err: err}
+		return readEditedDraft(path)
 	})
+}
+
+func readEditedDraft(path string) editorMsg {
+	file, err := os.Open(path)
+	if err != nil {
+		return editorMsg{err: err}
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxDraftBytes+1))
+	if len(data) > maxDraftBytes {
+		return editorMsg{err: fmt.Errorf("edited draft exceeds 8 MiB")}
+	}
+	if !utf8.Valid(data) {
+		return editorMsg{err: fmt.Errorf("edited draft is not UTF-8 text")}
+	}
+	return editorMsg{text: theme.Clean(string(data)), err: err}
 }

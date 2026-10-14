@@ -1,6 +1,7 @@
 package overlays
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,6 +26,37 @@ func TestFuzzyRankingAndUnicode(t *testing.T) {
 	}
 	if view := l.View(40, 12); !strings.Contains(ansi.Strip(view), "界面.go") || !strings.Contains(view, "\x1b[") {
 		t.Fatal("matching text not highlighted")
+	}
+}
+
+func TestGroupedPickerKeepsHeadersAndSelectionInsideRowBudget(t *testing.T) {
+	var items []Item
+	for i := range 12 {
+		items = append(items, Item{ID: fmt.Sprint(i), Label: fmt.Sprintf("Session %02d", i), Group: fmt.Sprintf("Day %02d", i/2), Preview: "Session preview"})
+	}
+	l := NewList("Sessions", items, true)
+	l.GroupHeaders = true
+	for _, size := range [][2]int{{26, 4}, {26, 7}, {40, 10}, {100, 15}} {
+		for cursor := range items {
+			l.Cursor = cursor
+			view := l.View(size[0], size[1])
+			if w, h := lipgloss.Size(view); w > size[0] || h > size[1] {
+				t.Fatalf("grouped picker overflow at %v, cursor %d: %dx%d\n%s", size, cursor, w, h, ansi.Strip(view))
+			}
+			if !strings.Contains(ansi.Strip(view), "› "+items[cursor].Label) {
+				t.Fatalf("selected session hidden at %v, cursor %d:\n%s", size, cursor, ansi.Strip(view))
+			}
+			if size[1] >= 10 && !strings.Contains(ansi.Strip(view), "─ "+items[cursor].Group+" ─") {
+				t.Fatal("scrolled window lost the selected session's group heading")
+			}
+		}
+	}
+	// Headings aren't navigable entries, and fuzzy filtering retains order.
+	l.Cursor = 0
+	l.Search.SetValue("Session")
+	l.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if item, ok := l.Selected(); !ok || item.ID != "1" || len(l.Filtered()) != len(items) {
+		t.Fatal("navigation counted a heading as a session")
 	}
 }
 
