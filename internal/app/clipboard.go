@@ -23,6 +23,37 @@ var ErrNoClipboardImage = errors.New("clipboard does not contain a supported ima
 
 const maxClipboardImageBytes = 8 << 20
 
+// ReadClipboardText uses the same bounded, cancellable local clipboard process
+// path as images. It never reads a remote terminal clipboard or sends a prompt.
+func ReadClipboardText(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var name string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		name = "pbpaste"
+	case "windows":
+		name, args = "powershell.exe", []string{"-NoProfile", "-NonInteractive", "-STA", "-Command", windowsClipboardText}
+	case "linux":
+		if os.Getenv("WAYLAND_DISPLAY") != "" {
+			name, args = "wl-paste", []string{"--no-newline", "--type", "text"}
+		} else if os.Getenv("DISPLAY") != "" {
+			if _, err := exec.LookPath("xclip"); err == nil {
+				name, args = "xclip", []string{"-selection", "clipboard", "-out", "-target", "UTF8_STRING"}
+			} else {
+				name, args = "xsel", []string{"--clipboard", "--output"}
+			}
+		} else {
+			return "", errors.New("text clipboard paste needs a local desktop; use terminal bracketed paste or /attach for remote/SSH sessions")
+		}
+	default:
+		return "", fmt.Errorf("clipboard text paste is unavailable on %s; use terminal bracketed paste", runtime.GOOS)
+	}
+	data, err := clipboardCommand(ctx, false, name, args...)
+	return string(data), err
+}
+
 // ReadClipboardImage reads the local desktop clipboard, not the remote terminal
 // clipboard. It creates an in-memory attachment; no files or prompts are written.
 func ReadClipboardImage(ctx context.Context) (harness.Attachment, error) {
@@ -84,16 +115,22 @@ func clipboardImageAttachment(data []byte) (harness.Attachment, error) {
 }
 
 type clipboardBuffer struct {
-	bytes.Buffer
-	limit int
+	// Do not embed bytes.Buffer: its promoted ReadFrom lets io.Copy bypass Write
+	// and therefore skip the output limit when exec streams command stdout.
+	buffer bytes.Buffer
+	limit  int
 }
 
 func (b *clipboardBuffer) Write(data []byte) (int, error) {
 	if len(data) > b.limit-b.Len() {
-		return 0, errors.New("clipboard image exceeds 8 MiB")
+		return 0, errors.New("clipboard content exceeds 8 MiB")
 	}
-	return b.Buffer.Write(data)
+	return b.buffer.Write(data)
 }
+
+func (b *clipboardBuffer) Len() int       { return b.buffer.Len() }
+func (b *clipboardBuffer) String() string { return b.buffer.String() }
+func (b *clipboardBuffer) Bytes() []byte  { return b.buffer.Bytes() }
 
 func clipboardCommand(ctx context.Context, encoded bool, name string, args ...string) ([]byte, error) {
 	limit := maxClipboardImageBytes
@@ -110,7 +147,7 @@ func clipboardCommand(ctx context.Context, encoded bool, name string, args ...st
 			return nil, ctx.Err()
 		}
 		if errors.Is(err, exec.ErrNotFound) {
-			return nil, fmt.Errorf("image paste requires %s to be installed; use /attach instead", name)
+			return nil, fmt.Errorf("clipboard paste requires %s to be installed; use terminal paste or /attach instead", name)
 		}
 		return nil, fmt.Errorf("read clipboard with %s: %w", name, err)
 	}
@@ -152,4 +189,11 @@ try {
   if ($stream.Length -gt 8MB) { throw 'Clipboard image too large' }
   [Convert]::ToBase64String($stream.ToArray())
 } finally { $stream.Dispose(); $image.Dispose() }
+`
+
+const windowsClipboardText = `
+Add-Type -AssemblyName System.Windows.Forms
+$text = [System.Windows.Forms.Clipboard]::GetText()
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::Write($text)
 `

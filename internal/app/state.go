@@ -40,6 +40,7 @@ type Conversation struct {
 	toolIndex                 map[string]*Entry
 	pendingUser               *Entry
 	pendingEcho               string
+	pendingMetadata           harness.SessionInfoPatch
 }
 
 type State struct {
@@ -82,6 +83,7 @@ func (s *State) Apply(e harness.Event) bool {
 		for _, c := range s.Conversations {
 			c.Busy, c.Cancelling, c.Loading = false, false, false
 			c.pendingUser, c.pendingEcho = nil, ""
+			c.pendingMetadata = harness.SessionInfoPatch{}
 		}
 		return true
 	}
@@ -89,7 +91,11 @@ func (s *State) Apply(e harness.Event) bool {
 		return false
 	}
 	if e.At.IsZero() {
-		e.At = time.Now()
+		c := s.Conversations[e.SessionID]
+		replay := c != nil && c.Loading && (e.Kind == harness.Message || e.Kind == harness.Tool)
+		if !replay {
+			e.At = time.Now()
+		}
 	}
 	switch e.Kind {
 	case harness.Connected:
@@ -112,11 +118,17 @@ func (s *State) Apply(e harness.Event) bool {
 		s.Notice = e.Text
 	case harness.SessionsListed:
 		s.Sessions = e.Sessions
+		for _, info := range e.Sessions {
+			if c := s.Conversations[info.ID]; c != nil {
+				c.Info.UpdatedAt = info.UpdatedAt
+			}
+		}
 	case harness.SessionLoading:
 		c := s.conversation(e.SessionID)
 		c.Entries = nil
 		c.messageIndex, c.toolIndex = make(map[string]*Entry), make(map[string]*Entry)
 		c.pendingUser, c.pendingEcho = nil, ""
+		c.pendingMetadata = harness.SessionInfoPatch{}
 		c.Loading = true
 		c.Busy, c.Cancelling = false, false
 		// Keep the displayed conversation (and its draft) selected until the
@@ -126,6 +138,11 @@ func (s *State) Apply(e harness.Event) bool {
 		if e.Session.Title == "" {
 			e.Session.Title = c.Info.Title
 		}
+		if e.Session.UpdatedAt == "" {
+			e.Session.UpdatedAt = c.Info.UpdatedAt
+		}
+		applyMetadata(&e.Session.SessionInfo, c.pendingMetadata)
+		c.pendingMetadata = harness.SessionInfoPatch{}
 		c.Info, c.Options, c.Loading = e.Session.SessionInfo, e.Session.Options, false
 		s.ActiveID = e.Session.ID
 		s.LastError = nil
@@ -194,12 +211,34 @@ func (s *State) Apply(e harness.Event) bool {
 		case harness.UsageChanged:
 			c.Usage = &e.Usage
 		case harness.Metadata:
-			if e.Text != "" {
-				c.Info.Title = e.Text
+			patch := e.Metadata
+			if patch.Title == nil && e.Text != "" {
+				patch.Title = &e.Text
+			}
+			applyMetadata(&c.Info, patch)
+			for i := range s.Sessions {
+				if s.Sessions[i].ID == e.SessionID {
+					applyMetadata(&s.Sessions[i], patch)
+				}
+			}
+			if patch.Title != nil {
+				c.pendingMetadata.Title = patch.Title
+			}
+			if patch.UpdatedAt != nil {
+				c.pendingMetadata.UpdatedAt = patch.UpdatedAt
 			}
 		}
 	}
 	return true
+}
+
+func applyMetadata(info *harness.SessionInfo, patch harness.SessionInfoPatch) {
+	if patch.Title != nil {
+		info.Title = *patch.Title
+	}
+	if patch.UpdatedAt != nil {
+		info.UpdatedAt = *patch.UpdatedAt
+	}
 }
 
 func (s *State) applyMessage(c *Conversation, chunk harness.MessageChunk, at time.Time) {

@@ -120,7 +120,7 @@ func (c *Client) mcp() ([]acp.McpServer, error) {
 	return servers, nil
 }
 
-func (c *Client) NewSession(ctx context.Context) (harness.Session, error) {
+func (c *Client) NewSession(ctx context.Context) (result harness.Session, err error) {
 	servers, err := c.mcp()
 	if err != nil {
 		return harness.Session{}, err
@@ -130,30 +130,43 @@ func (c *Client) NewSession(ctx context.Context) (harness.Session, error) {
 		return harness.Session{}, mapError(err)
 	}
 	info := harness.SessionInfo{ID: string(session.ID()), Workspace: c.options.Workspace, AdditionalRoots: c.options.AdditionalRoots}
-	if err := c.register(session, info); err != nil {
+	options, err := normalizeOptions(response.ConfigOptions, response.Modes)
+	if err != nil {
 		return harness.Session{}, err
 	}
-	options, err := normalizeOptions(response.ConfigOptions, response.Modes)
-	return harness.Session{SessionInfo: info, Options: options}, err
+	finish, err := c.files.StageSession(info.ID, append([]string{info.Workspace}, info.AdditionalRoots...))
+	if err != nil {
+		return harness.Session{}, err
+	}
+	cleanup := c.terminals.SessionCheckpoint(info.ID)
+	defer func() {
+		if err != nil {
+			cleanup()
+		}
+		finish(err == nil)
+	}()
+	return c.configureSession(ctx, session, info, options)
 }
 
-func (c *Client) LoadSession(ctx context.Context, info harness.SessionInfo, replay bool) (harness.Session, error) {
+func (c *Client) LoadSession(ctx context.Context, info harness.SessionInfo, replay bool) (result harness.Session, err error) {
 	caps := c.Peer().Capabilities
 	if (replay && !caps.Load) || (!replay && !caps.Resume) {
 		return harness.Session{}, harness.ErrUnsupported
 	}
-	// An explicit --session may arrive with only an ID. Discover the saved
-	// directory instead of assuming the client's current workspace is its home.
-	if info.Title == "" && caps.List {
-		stored, err := c.listSessions(ctx, acp.Opt[string]{})
-		if err != nil {
+	// Refresh native metadata even when a local reference already has a title;
+	// its last-activity date may be stale. An explicit --session may have only
+	// an ID, so also discover its directory rather than assume the current one.
+	if caps.List {
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		stored, found, err := c.findSession(lookupCtx, info.ID)
+		cancel()
+		if err != nil && (info.Workspace == "" || errors.Is(err, harness.ErrAuthRequired) || ctx.Err() != nil) {
 			return harness.Session{}, err
 		}
-		for _, candidate := range stored {
-			if candidate.ID == info.ID {
-				info.Workspace, info.Title, info.UpdatedAt = candidate.Workspace, candidate.Title, candidate.UpdatedAt
-				break
-			}
+		if found {
+			info.Workspace, info.Title, info.UpdatedAt = stored.Workspace, stored.Title, stored.UpdatedAt
+		} else if err != nil {
+			c.sink(harness.Event{Kind: harness.Notice, Text: "Session metadata unavailable; loading the saved workspace reference."})
 		}
 	}
 	servers, err := c.mcp()
@@ -168,9 +181,17 @@ func (c *Client) LoadSession(ctx context.Context, info harness.SessionInfo, repl
 	}
 	// Register roots first: replay can contain client callbacks before the
 	// lifecycle response returns. The selected session's workspace is authoritative.
-	if err := c.files.SetSession(info.ID, append([]string{info.Workspace}, info.AdditionalRoots...)); err != nil {
+	finish, err := c.files.StageSession(info.ID, append([]string{info.Workspace}, info.AdditionalRoots...))
+	if err != nil {
 		return harness.Session{}, err
 	}
+	cleanup := c.terminals.SessionCheckpoint(info.ID)
+	defer func() {
+		if err != nil {
+			cleanup()
+		}
+		finish(err == nil)
+	}()
 	var session *acp.ClientSession
 	var options []harness.ConfigOption
 	if replay {
@@ -189,20 +210,57 @@ func (c *Client) LoadSession(ctx context.Context, info harness.SessionInfo, repl
 	if err != nil {
 		return harness.Session{}, mapError(err)
 	}
-	if err := c.register(session, info); err != nil {
-		return harness.Session{}, err
-	}
-	return harness.Session{SessionInfo: info, Options: options}, nil
+	return c.configureSession(ctx, session, info, options)
 }
 
-func (c *Client) register(session *acp.ClientSession, info harness.SessionInfo) error {
-	if err := c.files.SetSession(info.ID, append([]string{info.Workspace}, info.AdditionalRoots...)); err != nil {
-		return err
+// sessionDefaults runs before SessionReady, so the first prompt cannot race a
+// mode change. It never guesses unadvertised modes or answers permission requests.
+func (c *Client) sessionDefaults(ctx context.Context, session harness.Session) (harness.Session, error) {
+	for _, preferred := range c.options.DefaultModes {
+		for i, option := range session.Options {
+			if option.Category != "mode" || option.Type != "select" {
+				continue
+			}
+			for _, choice := range option.Choices {
+				if choice.Value != preferred {
+					continue
+				}
+				if option.Value == preferred {
+					return session, nil
+				}
+				updated, err := c.SetOption(ctx, session.ID, option, preferred)
+				if err != nil {
+					return harness.Session{}, fmt.Errorf("set default mode %q: %w", preferred, mapError(err))
+				}
+				if option.Legacy {
+					// set_mode returns no full catalog; retain the other options.
+					session.Options[i].Value = preferred
+				} else {
+					session.Options = updated
+				}
+				return session, nil
+			}
+		}
 	}
+	return session, nil
+}
+
+func (c *Client) configureSession(ctx context.Context, session *acp.ClientSession, info harness.SessionInfo, options []harness.ConfigOption) (harness.Session, error) {
 	c.mu.Lock()
+	previous := c.sessions[info.ID]
 	c.sessions[info.ID] = session
 	c.mu.Unlock()
-	return nil
+	result, err := c.sessionDefaults(ctx, harness.Session{SessionInfo: info, Options: options})
+	if err != nil {
+		c.mu.Lock()
+		if previous != nil {
+			c.sessions[info.ID] = previous
+		} else {
+			delete(c.sessions, info.ID)
+		}
+		c.mu.Unlock()
+	}
+	return result, err
 }
 
 func (c *Client) session(id string) (*acp.ClientSession, error) {
@@ -224,26 +282,47 @@ func (c *Client) ListSessions(ctx context.Context) ([]harness.SessionInfo, error
 
 func (c *Client) listSessions(ctx context.Context, cwd acp.Opt[string]) ([]harness.SessionInfo, error) {
 	var result []harness.SessionInfo
+	err := c.visitSessions(ctx, cwd, func(info harness.SessionInfo) bool {
+		result = append(result, info)
+		return false
+	})
+	return result, err
+}
+
+func (c *Client) findSession(ctx context.Context, id string) (result harness.SessionInfo, found bool, err error) {
+	err = c.visitSessions(ctx, acp.Opt[string]{}, func(info harness.SessionInfo) bool {
+		if info.ID != id {
+			return false
+		}
+		result, found = info, true
+		return true
+	})
+	return result, found, err
+}
+
+func (c *Client) visitSessions(ctx context.Context, cwd acp.Opt[string], visit func(harness.SessionInfo) bool) error {
 	var cursor acp.Opt[string]
 	seen := make(map[string]bool)
 	for page := 0; page < 100; page++ {
 		response, err := c.conn.ListSessions(ctx, &acp.ListSessionsRequest{Cwd: cwd, Cursor: cursor})
 		if err != nil {
-			return nil, mapError(err)
+			return mapError(err)
 		}
 		for _, info := range response.Sessions {
-			result = append(result, sessionInfo(info))
+			if visit(sessionInfo(info)) {
+				return nil
+			}
 		}
 		next, ok := response.NextCursor.Get()
 		if !ok || next == "" {
-			return result, nil
+			return nil
 		}
 		if seen[next] {
-			return nil, errors.New("agent returned a repeated session-list cursor")
+			return errors.New("agent returned a repeated session-list cursor")
 		}
 		seen[next], cursor = true, acp.OptValue(next)
 	}
-	return nil, errors.New("agent session list exceeds 100 pages")
+	return errors.New("agent session list exceeds 100 pages")
 }
 
 func (c *Client) DeleteSession(ctx context.Context, id string) error {

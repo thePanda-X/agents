@@ -254,10 +254,28 @@ func MergeEnv(base []string, overrides map[string]string) []string {
 }
 
 func (m *Terminals) CloseSession(sessionID string) {
+	m.cleanupSession(sessionID, nil)
+}
+
+// SessionCheckpoint returns a cleanup function for terminals created after
+// setup began. Existing session terminals survive an unsuccessful reload.
+func (m *Terminals) SessionCheckpoint(sessionID string) func() {
+	m.mu.Lock()
+	existing := make(map[string]bool)
+	for id, terminal := range m.items {
+		if terminal.sessionID == sessionID {
+			existing[id] = true
+		}
+	}
+	m.mu.Unlock()
+	return func() { m.cleanupSession(sessionID, existing) }
+}
+
+func (m *Terminals) cleanupSession(sessionID string, keep map[string]bool) {
 	m.mu.Lock()
 	var ids []string
 	for id, terminal := range m.items {
-		if terminal.sessionID == sessionID {
+		if terminal.sessionID == sessionID && !keep[id] {
 			ids = append(ids, id)
 		}
 	}

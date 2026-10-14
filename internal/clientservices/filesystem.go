@@ -24,6 +24,7 @@ type directory struct {
 }
 
 type FileSystem struct {
+	setupMu  sync.Mutex
 	mu       sync.RWMutex
 	sessions map[string][]directory
 }
@@ -35,29 +36,63 @@ func NewFileSystem() *FileSystem {
 // SetSession opens directory handles before publishing them. os.Root enforces
 // traversal boundaries during the actual operation, not just a prior path check.
 func (f *FileSystem) SetSession(id string, paths []string) error {
+	finish, err := f.StageSession(id, paths)
+	if err != nil {
+		return err
+	}
+	finish(true)
+	return nil
+}
+
+// StageSession authorizes callbacks during session setup, retaining the old
+// directory handles until the caller commits or aborts. Setup and cleanup are
+// serialized; ordinary file operations remain available while setup is pending.
+// The caller must invoke finish; subsequent calls are harmless.
+func (f *FileSystem) StageSession(id string, paths []string) (finish func(bool), err error) {
+	f.setupMu.Lock()
 	var roots []directory
+	defer func() {
+		if err != nil {
+			closeDirectories(roots)
+			f.setupMu.Unlock()
+		}
+	}()
 	for _, path := range paths {
 		if !filepath.IsAbs(path) {
-			closeDirectories(roots)
-			return fmt.Errorf("workspace root must be absolute: %s", path)
+			return nil, fmt.Errorf("workspace root must be absolute: %s", path)
 		}
 		canonical, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			closeDirectories(roots)
-			return err
+			return nil, err
 		}
 		root, err := os.OpenRoot(canonical)
 		if err != nil {
-			closeDirectories(roots)
-			return err
+			return nil, err
 		}
 		roots = append(roots, directory{path: filepath.Clean(path), canonical: canonical, root: root})
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	closeDirectories(f.sessions[id])
+	previous, existed := f.sessions[id]
 	f.sessions[id] = roots
-	return nil
+	f.mu.Unlock()
+	var once sync.Once
+	return func(commit bool) {
+		once.Do(func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			defer f.setupMu.Unlock()
+			if commit {
+				closeDirectories(previous)
+				return
+			}
+			if existed {
+				f.sessions[id] = previous
+			} else {
+				delete(f.sessions, id)
+			}
+			closeDirectories(roots)
+		})
+	}, nil
 }
 
 func (f *FileSystem) locate(id, path string) (directory, string, error) {
@@ -197,6 +232,8 @@ func (f *FileSystem) Directory(id, path string) (string, error) {
 }
 
 func (f *FileSystem) Close() {
+	f.setupMu.Lock()
+	defer f.setupMu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for id, roots := range f.sessions {
@@ -212,6 +249,8 @@ func closeDirectories(roots []directory) {
 }
 
 func (f *FileSystem) RemoveSession(id string) {
+	f.setupMu.Lock()
+	defer f.setupMu.Unlock()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	closeDirectories(f.sessions[id])

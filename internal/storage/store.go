@@ -49,6 +49,9 @@ type Store struct {
 	Directory    string
 	mu           sync.Mutex
 	lastRevision uint64
+	initialized  bool
+	settings     Settings
+	snapshot     Snapshot
 }
 
 func DefaultDirectory() (string, error) {
@@ -63,6 +66,17 @@ func DefaultDirectory() (string, error) {
 }
 
 func (s *Store) Load() (Settings, Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	settings, snapshot, err := s.load()
+	if err == nil {
+		s.settings, s.snapshot = cloneSettings(settings), cloneSnapshot(snapshot)
+		s.initialized = true
+	}
+	return settings, snapshot, err
+}
+
+func (s *Store) load() (Settings, Snapshot, error) {
 	settings := Settings{Harness: "opencode", Mouse: true, Keybindings: make(map[string]string)}
 	snapshot := Snapshot{Version: 1, Workspaces: make(map[string]WorkspaceState)}
 	if err := s.read("settings.json", &settings); err != nil {
@@ -105,13 +119,31 @@ func (s *Store) Save(settings Settings, snapshot Snapshot) error {
 	if err := os.MkdirAll(s.Directory, 0o700); err != nil {
 		return err
 	}
-	if err := s.write("settings.json", settings); err != nil {
+	lock, err := lockStore(filepath.Join(s.Directory, ".state.lock"))
+	if err != nil {
 		return err
 	}
-	if err := s.write("state.json", snapshot); err != nil {
+	defer lock.Close()
+	currentSettings, currentSnapshot, err := s.load()
+	if err != nil {
+		return err
+	}
+	mergedSettings := mergeSettings(currentSettings, s.settings, settings)
+	if !s.initialized {
+		mergedSettings = settings
+	}
+	mergedSnapshot := mergeSnapshot(currentSnapshot, s.snapshot, snapshot)
+	if err := s.write("settings.json", mergedSettings); err != nil {
+		return err
+	}
+	if err := s.write("state.json", mergedSnapshot); err != nil {
 		return err
 	}
 	s.lastRevision = snapshot.Revision
+	// Keep this client's submitted baseline, not the merged disk state. Otherwise
+	// its next save would mistake another client's unseen additions for deletions.
+	s.settings, s.snapshot = cloneSettings(settings), cloneSnapshot(snapshot)
+	s.initialized = true
 	return nil
 }
 
