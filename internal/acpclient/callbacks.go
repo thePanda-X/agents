@@ -22,7 +22,7 @@ func (c *Client) clientConfig() *acp.ClientConfig {
 			Session:     acp.OptValue(acp.ClientSessionCapabilities{ConfigOptions: acp.OptValue(acp.SessionConfigOptionsCapabilities{Boolean: acp.OptValue(acp.BooleanConfigOptionCapabilities{})})}),
 		},
 		SessionUpdate: func(_ context.Context, notification *acp.SessionNotification) {
-			event, err := normalizeUpdate(notification)
+			event, err := normalizeUpdate(notification, c.options.DecodeUsageLimits)
 			if err != nil {
 				c.sink(harness.Event{Kind: harness.Notice, Text: err.Error()})
 				return

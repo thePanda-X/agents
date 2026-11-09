@@ -31,6 +31,7 @@ func New(ctx context.Context, options harness.Options, sink harness.Sink) (harne
 	// Bypass may be omitted by the bridge (for example by managed policy).
 	// Accept edits is the least restrictive remaining verified mode.
 	options.DefaultModes = []string{"bypassPermissions", "acceptEdits"}
+	options.DecodeUsageLimits = decodeUsageLimits
 	adapter, err := acpclient.New(ctx, options, sink)
 	if options.Launch.Command == command && errors.Is(err, exec.ErrNotFound) {
 		return nil, fmt.Errorf("%w; install the Claude ACP bridge with `npm install -g @agentclientprotocol/claude-agent-acp` (Node.js 22+), then reconnect", err)

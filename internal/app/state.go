@@ -52,8 +52,11 @@ type State struct {
 	Sessions        []harness.SessionInfo
 	Interactions    []*harness.Interaction
 	TerminalOutputs map[string]string
-	Notice          string
-	LastError       error
+	// UsageLimits is account-wide subscription usage reported by the harness.
+	// It is kept outside conversations because windows survive session changes.
+	UsageLimits []harness.UsageLimit
+	Notice      string
+	LastError   error
 }
 
 func NewState() *State {
@@ -209,7 +212,14 @@ func (s *State) Apply(e harness.Event) bool {
 		case harness.Plan:
 			c.Plan = e.Plan
 		case harness.UsageChanged:
-			c.Usage = &e.Usage
+			// Context and session cost belong to one conversation; subscription
+			// windows are account-wide and can arrive on any session update.
+			usage := &harness.Usage{Used: e.Usage.Used, Size: e.Usage.Size, Cost: e.Usage.Cost}
+			if usage.Cost == nil && c.Usage != nil {
+				usage.Cost = c.Usage.Cost
+			}
+			c.Usage = usage
+			s.UsageLimits = mergeUsageLimits(s.UsageLimits, e.Usage.Limits, e.At)
 		case harness.Metadata:
 			patch := e.Metadata
 			if patch.Title == nil && e.Text != "" {

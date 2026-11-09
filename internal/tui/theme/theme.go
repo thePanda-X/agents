@@ -78,6 +78,7 @@ var (
 	Accent  = lipgloss.NewStyle().Foreground(Pink)
 	Heading = Accent.Bold(true)
 	Error   = lipgloss.NewStyle().Foreground(Red)
+	Warning = lipgloss.NewStyle().Foreground(Amber)
 	Success = lipgloss.NewStyle().Foreground(Green)
 	Panel   = Body.Background(Surface).Border(lipgloss.RoundedBorder()).BorderForeground(Border).Padding(1, 2)
 )

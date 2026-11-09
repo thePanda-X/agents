@@ -4,7 +4,7 @@ func actionGroup(id string) string {
 	switch id {
 	case "files", "paste", "paste_image", "pastes", "clear_attachments", "attachments":
 		return "Attachments"
-	case "options", "effort", "harness", "auth", "reconnect", "cancel", "commands", "skills":
+	case "options", "effort", "harness", "auth", "reconnect", "cancel", "commands", "skills", "limits":
 		return "Agent"
 	case "plan", "changes", "search", "inspect", "code", "open_file", "export", "copy", "diagnostics":
 		return "Review"

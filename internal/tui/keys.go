@@ -30,6 +30,7 @@ var actionCatalog = []actionSpec{
 	{"attachments", "Review pending attachments", ""},
 	{"plan", "Agent plan", ""},
 	{"changes", "Review reported changes", ""},
+	{"limits", "Subscription usage", ""},
 	{"search", "Search transcript", ""},
 	{"history", "Search prompt history", "ctrl+r"},
 	{"thoughts", "Toggle reasoning visibility", ""},
@@ -370,6 +371,8 @@ func (m *Model) perform(action string) tea.Cmd {
 		m.openPlan()
 	case "changes":
 		m.openChanges()
+	case "limits":
+		m.openLimits()
 	case "settings":
 		m.openSettings()
 	case "harness":

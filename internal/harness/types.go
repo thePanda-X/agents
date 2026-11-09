@@ -48,8 +48,12 @@ type Options struct {
 	DefaultModes []string
 	// MCP is ACP's standard session MCP-server configuration. Keeping it opaque
 	// here avoids making the domain depend on an individual Go ACP SDK.
-	MCP         json.RawMessage
-	Diagnostics io.Writer
+	MCP json.RawMessage
+	// DecodeUsageLimits optionally extracts subscription usage windows from
+	// agent-specific metadata. Adapters pass the raw metadata object when one is
+	// present. Implementations must ignore unknown keys and malformed values.
+	DecodeUsageLimits func(json.RawMessage) []UsageLimit
+	Diagnostics       io.Writer
 }
 
 type SessionInfo struct {
@@ -128,12 +132,37 @@ type PlanEntry struct {
 type Usage struct {
 	Used, Size uint64
 	Cost       *Cost
+	// Limits contains optional subscription quota windows reported by the
+	// harness. An empty slice means the harness has no limits to report.
+	Limits []UsageLimit
 }
 
 type Cost struct {
 	Amount   float64
 	Currency string
 }
+
+// UsageLimit is one subscription quota window, such as a rolling five-hour
+// session limit or a weekly cap. Limits are account-wide even though they
+// arrive on a session's usage update.
+type UsageLimit struct {
+	// Kind is a stable harness-defined identifier such as "five_hour".
+	Kind string
+	// Label is a short display label such as "5h".
+	Label string
+	// Utilization is the fraction of the window consumed, in [0, 1].
+	Utilization float64
+	// ResetsAt is the window reset time, or the zero time when unknown.
+	ResetsAt time.Time
+	// Status is allowed, allowed_warning, or rejected.
+	Status string
+}
+
+const (
+	LimitAllowed  = "allowed"
+	LimitWarning  = "allowed_warning"
+	LimitRejected = "rejected"
+)
 
 type PermissionOption struct {
 	ID, Name, Kind string

@@ -33,6 +33,7 @@ var localSlashCommands = []slashCommand{
 	{Name: "settings", Description: "Show interface settings", Action: "settings", Aliases: []string{"config", "preferences", "prefs"}},
 	{Name: "plan", Description: "View the reported agent plan", Action: "plan"},
 	{Name: "changes", Description: "Review reported diffs", Action: "changes", Aliases: []string{"diff", "diffs"}},
+	{Name: "limits", Description: "Show subscription usage reported by the agent", Action: "limits", Aliases: []string{"quota", "subscription"}},
 	{Name: "attach", Description: "Attach a file, or open the file picker", Arguments: "[path]", Action: "files", Aliases: []string{"add", "file", "files"}},
 	{Name: "paste-image", Description: "Attach an image from the local desktop clipboard", Action: "paste_image"},
 	{Name: "pastes", Description: "Review or remove collapsed text blocks in the draft", Action: "pastes"},

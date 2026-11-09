@@ -185,6 +185,18 @@ func (m *Model) activity(width int) string {
 	if m.state.Connection == "disconnected" {
 		right = theme.Quiet.Render(m.binding("reconnect") + " reconnect")
 	}
+	// Keep four columns free so theme.Line can show both sides instead of
+	// truncating the right-hand status when the terminal is narrow.
+	barWidth := width - 4
+	if right != "" {
+		barWidth -= lipgloss.Width(right) + 2
+	}
+	if bar := m.limitBarAt(time.Now(), barWidth); bar != "" {
+		if right != "" {
+			right += "  "
+		}
+		right += bar
+	}
 	return theme.Line(left, right, width)
 }
 

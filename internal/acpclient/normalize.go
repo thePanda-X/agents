@@ -137,7 +137,7 @@ func contentText(block acp.ContentBlock) string {
 	}
 }
 
-func normalizeUpdate(notification *acp.SessionNotification) (harness.Event, error) {
+func normalizeUpdate(notification *acp.SessionNotification, decodeUsageLimits func(json.RawMessage) []harness.UsageLimit) (harness.Event, error) {
 	e := harness.Event{SessionID: string(notification.SessionID)}
 	chunk := func(c acp.ContentChunk, role string) {
 		e.Kind = harness.Message
@@ -185,6 +185,13 @@ func normalizeUpdate(notification *acp.SessionNotification) (harness.Event, erro
 		e.Kind, e.Usage = harness.UsageChanged, harness.Usage{Used: v.Used, Size: v.Size}
 		if cost, ok := v.Cost.Get(); ok {
 			e.Usage.Cost = &harness.Cost{Amount: cost.Amount, Currency: cost.Currency}
+		}
+		if decodeUsageLimits != nil {
+			if meta, ok := v.Meta.Get(); ok {
+				if encoded, err := json.Marshal(meta); err == nil {
+					e.Usage.Limits = decodeUsageLimits(encoded)
+				}
+			}
 		}
 	default:
 		return e, fmt.Errorf("unsupported session update %T", notification.Update)

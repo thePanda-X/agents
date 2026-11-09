@@ -21,7 +21,10 @@ parent Git repository root. No `--cwd` argument is required.
 
 The header shows the workspace as `<dir>:<branch>` when a Git branch is available
 and refreshes it automatically. Outside Git repositories or with a detached
-HEAD, it shows just the directory.
+HEAD, it shows just the directory. When the harness reports subscription usage,
+the line above the composer shows one compact meter at a time, such as
+`5h ━━━━━━──── 58% ↻ 2h 10m`, alternating windows every 15 seconds; `/limits`
+opens the reset times and status for every window.
 
 Go installs the command into `$GOBIN`, or `$(go env GOPATH)/bin` when GOBIN is
 unset. Make sure that directory is on your `PATH`.
@@ -460,6 +463,7 @@ You can also type or paste a complete command and run it directly.
 | `/model [value]`, `/effort [value]`, `/mode [value]` | Open the relevant selector, or set an advertised value ID/name |
 | `/options`, `/harness`, `/settings`, `/auth` | Open the corresponding controls |
 | `/plan`, `/changes` | Inspect the reported plan or diffs |
+| `/limits` | Show subscription usage reported by the agent |
 | `/attach [path]`, `/detach` | Attach a file (or browse files), or remove pending attachments |
 | `/attachments` | Inspect pending attachments or remove individual ones |
 | `/thoughts`, `/copy`, `/editor` | Toggle reasoning, copy highlighted text (or the last response), or compose in your editor |
@@ -477,6 +481,11 @@ them or send a prompt. File paths after `/attach` are literal and can
 contain spaces; do not add shell quotes. Relative paths use the active workspace.
 For example, `/mode plan` selects an agent-advertised mode and
 `/attach docs/design notes.md` attaches that file without sending a prompt.
+
+`/limits` is only populated when the connected harness reports subscription
+windows. Claude Code reports 5-hour and weekly claude.ai plan utilization during
+a turn; API-key, Bedrock, and Vertex sessions may report none. Its native
+`/usage` command remains available, and `/agent usage` reaches it explicitly.
 
 ### Shared command aliases
 
@@ -497,6 +506,7 @@ identical to those of the canonical command.
 | `/harness` | `/backend` |
 | `/settings` | `/config`, `/preferences`, `/prefs` |
 | `/changes` | `/diff`, `/diffs` |
+| `/limits` | `/quota`, `/subscription` |
 | `/attach [path]` | `/add [path]`, `/file [path]`, `/files [path]` |
 | `/detach` | `/remove`, `/unattach` |
 | `/thoughts` | `/thinking`, `/reasoning` |
