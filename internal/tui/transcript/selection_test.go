@@ -108,3 +108,23 @@ func TestTextSelectionKeepsRenderedEntryPositions(t *testing.T) {
 		}
 	}
 }
+
+func TestSourceCopiesRawTextInsteadOfRenderedWrapAndMarkdown(t *testing.T) {
+	raw := "Use **bold** and `code` here, then keep reading this sentence until it wraps onto another row."
+	entries := []*app.Entry{{ID: "a", Role: "assistant", Text: raw}, {ID: "b", Role: "assistant", Text: "- one\n- two"}}
+	content, positions := New().Render(&app.Conversation{Entries: entries}, Options{Width: 40})
+	lines := strings.Split(ansi.Strip(content), "\n")
+	last := len(lines) - 1
+
+	all := TextSelection{Anchor: TextPosition{0, 2}, Head: TextPosition{last, 200}}
+	if got, want := all.Source(content, entries, positions), raw+"\n\n"+"- one\n- two"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	// Partial selection inside the first entry maps to a raw substring across wraps.
+	col := strings.Index(lines[0], "and")
+	part := TextSelection{Anchor: TextPosition{0, col}, Head: TextPosition{1, 8}}
+	got := part.Source(content, entries, positions)
+	if !strings.HasPrefix(got, "and `code` here") || strings.Contains(got, "\n") {
+		t.Fatalf("got %q", got)
+	}
+}

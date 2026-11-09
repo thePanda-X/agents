@@ -221,8 +221,9 @@ Ctrl+Y and `/copy` (`/yank`) also prefer highlighted text. **Esc** or a new clic
 clears highlighting; typing in the composer resumes normal draft editing.
 Highlighted text uses a muted plum background with light text; Terminal default
 appearance uses reverse video so selections stay visible without application colors.
-Selections copy rendered text without colors or the transcript gutter, preserving
-visible line breaks and code indentation. Scroll with the wheel to select across
+Selections in messages copy the original text the agent or you sent (Markdown source,
+no soft-wrap line breaks, borders or gutter). Tool and thinking rows, or text that
+cannot be matched to its source, copy the rendered text with visible line breaks. Scroll with the wheel to select across
 pages. Highlighting pauses automatic following and clears when resizing or
 changing layout would invalidate the selected text. A green, short-lived copy
 indicator appears above the statusline; OSC52 requires terminal clipboard

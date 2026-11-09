@@ -161,7 +161,7 @@ func (m *Model) copyTextSelection() tea.Cmd {
 	if !m.hasTextSelection() {
 		return nil
 	}
-	text := m.textSelection.Text(m.transcriptContent)
+	text := m.textSelection.Source(m.transcriptContent, m.state.Active().Entries, m.positions)
 	if strings.TrimSpace(text) == "" {
 		m.state.Notice = "Select some response text to copy"
 		return nil
