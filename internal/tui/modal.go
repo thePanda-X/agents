@@ -38,7 +38,7 @@ func (m *Model) interactionLayout(height int) (choices, details, gaps int) {
 
 func (m *Model) modalContent(width, height int) string {
 	if m.form != nil {
-		return modalTitle("Question · "+m.opts.Descriptor.Name, width) + "\n" + m.form.View(width, height-1)
+		return m.form.View(width, height)
 	}
 	if m.interaction != nil && m.list != nil {
 		choices, _, gaps := m.interactionLayout(height)

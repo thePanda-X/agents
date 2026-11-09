@@ -405,19 +405,21 @@ not automatically expose your laptop's image clipboard; use `/attach` with an
 image file available on the remote machine instead.
 
 Permission choices are supplied by the agent, not invented by the UI. Structured
-forms show questions and option descriptions with keyboard-driven single-choice
-rows and multi-select checkboxes. Use arrows to move, Space/Enter to select,
-Tab/Shift+Tab to change fields, and PgUp/PgDn to scroll long questions or reviews.
-Free-text fields (including agent-supplied “Other” answers) remain editable.
-Ctrl+S reviews, then Ctrl+S submits; Tab returns from review to editing.
-Alt+S skips the entire form (`decline`); Esc cancels it (`cancel`). Drafts and
-attachments are preserved, and the footer shows “Waiting for your answer”.
-This supports agents that send ACP form elicitation, including Claude ACP's
-`AskUserQuestion` mapping. OpenCode's native question tool requires its ACP
-bridge to forward questions and replies; this client does not enable that tool
-or infer interactive questions from ordinary prose. External interactions display the
-full URL and require consent before opening a browser. Diffs are informational:
-Agents does not apply a reported edit a second time.
+forms show one question card at a time with option descriptions and an inline
+“Other” answer where the agent supplies one. Use arrows to move, Space to
+select or toggle, Enter to choose and continue, and Tab/Shift+Tab or Left/Right
+to change questions. A single-question form sends on Enter; a multi-question
+form ends with a labeled review and a Submit row. Ctrl+Enter sends immediately,
+PgUp/PgDn scroll long questions, and free-text fields remain editable.
+Esc skips the form (`decline`), while Ctrl+C cancels the interaction (`cancel`);
+Alt+S also skips. Drafts and attachments are preserved, and the footer shows
+“Waiting for your answer”. This supports agents that send ACP form elicitation,
+including Claude ACP's `AskUserQuestion` mapping. OpenCode's native question
+tool requires its ACP bridge to forward questions and replies; this client does
+not enable that tool or infer interactive questions from ordinary prose.
+External interactions display the full URL and require consent before opening a
+browser. Diffs are informational: Agents does not apply a reported edit a
+second time.
 
 Expanded patch/write/edit tools prefer structured ACP diffs. When those are
 absent, the client can display reported unified patches, `apply_patch` payloads,

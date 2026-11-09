@@ -118,27 +118,25 @@ func (m *Model) permissionDetail(i *harness.Interaction) string {
 
 func (m *Model) interactionKey(key tea.KeyPressMsg) tea.Cmd {
 	i := m.interaction
-	if key.String() == "esc" {
-		m.answer(i, harness.Decision{Action: "cancel"})
-		return nil
-	}
 	if m.form != nil {
 		if key.String() == "alt+s" {
 			m.answer(i, harness.Decision{Action: "decline"})
 			return nil
 		}
-		if key.String() == "ctrl+s" || key.String() == "ctrl+enter" {
-			if m.form.Review {
-				m.answer(i, harness.Decision{Action: "accept", Content: m.form.Content})
-			} else {
-				m.form.Prepare()
-			}
+		action, cmd := m.form.Key(key)
+		switch action {
+		case overlays.ActionSubmit:
+			m.answer(i, harness.Decision{Action: "accept", Content: m.form.Content})
+			return nil
+		case overlays.ActionSkip:
+			m.answer(i, harness.Decision{Action: "decline"})
 			return nil
 		}
-		if key.String() == "tab" && m.form.Review {
-			return m.form.Edit()
-		}
-		return m.form.Update(key)
+		return cmd
+	}
+	if key.String() == "esc" {
+		m.answer(i, harness.Decision{Action: "cancel"})
+		return nil
 	}
 	if m.list == nil {
 		return nil

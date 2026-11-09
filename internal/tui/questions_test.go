@@ -8,39 +8,33 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestQuestionReviewSkipCancelPreserveDraft(t *testing.T) {
+func openQuestion(t *testing.T, schema string) (*Model, *harness.Interaction) {
+	t.Helper()
+	m := testModel(t)
+	m.input.SetValue("my unsent draft")
+	m.attachments = []harness.Attachment{{}}
+	i := &harness.Interaction{ID: "question", Kind: "form", Message: "Choose an approach", Schema: json.RawMessage(schema), Reply: make(chan harness.Decision, 1)}
+	m.state.Interactions = []*harness.Interaction{i}
+	m.syncInteraction()
+	if m.form == nil || m.form.Message != i.Message {
+		t.Fatal("question not opened")
+	}
+	return m, i
+}
+
+func TestQuestionSendSkipCancelPreserveDraft(t *testing.T) {
+	schema := `{"type":"object","properties":{"q":{"type":"string","enum":["safe","fast"]}},"required":["q"]}`
 	for _, action := range []string{"accept", "decline", "cancel"} {
 		t.Run(action, func(t *testing.T) {
-			m := testModel(t)
-			m.input.SetValue("my unsent draft")
-			m.attachments = []harness.Attachment{{}}
-			i := &harness.Interaction{ID: "question", Kind: "form", Message: "Choose an approach", Schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string","enum":["safe","fast"]}},"required":["q"]}`), Reply: make(chan harness.Decision, 1)}
-			m.state.Interactions = []*harness.Interaction{i}
-			m.syncInteraction()
-			if m.form == nil || m.form.Message != i.Message {
-				t.Fatal("question not opened")
-			}
-			if action == "accept" {
+			m, i := openQuestion(t, schema)
+			switch action {
+			case "accept":
 				m.interactionKey(tea.KeyPressMsg{Code: tea.KeySpace})
-				m.interactionKey(ctrl('s'))
-				if !m.form.Review {
-					t.Fatal("missing review")
-				}
-				select {
-				case <-i.Reply:
-					t.Fatal("sent before review confirmation")
-				default:
-				}
-				m.interactionKey(tea.KeyPressMsg{Code: tea.KeyTab})
-				if m.form.Review {
-					t.Fatal("cannot return to editing")
-				}
-				m.interactionKey(ctrl('s'))
-				m.interactionKey(ctrl('s'))
-			} else if action == "decline" {
+				m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			case "decline":
 				m.interactionKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt})
-			} else {
-				m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+			case "cancel":
+				m.Update(ctrl('c'))
 			}
 			select {
 			case answer := <-i.Reply:
@@ -63,6 +57,55 @@ func TestQuestionReviewSkipCancelPreserveDraft(t *testing.T) {
 				t.Fatal("draft or interaction lifecycle damaged")
 			}
 		})
+	}
+}
+
+func TestQuestionEscSkipsFromOptionsAndLeavesOtherFirst(t *testing.T) {
+	m, i := openQuestion(t, `{"type":"object","properties":{"q":{"type":"string","enum":["safe","fast"]},"q_custom":{"type":"string"}}}`)
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.form == nil || m.form.Questions[0].Field.Cursor != len(m.form.Questions[0].Field.Options) {
+		t.Fatal("down did not reach Other")
+	}
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.form == nil || m.form.Questions[0].Field.Cursor == len(m.form.Questions[0].Field.Options) {
+		t.Fatal("Esc in Other did not return to the options")
+	}
+	select {
+	case answer := <-i.Reply:
+		t.Fatalf("Esc in Other answered the form: %s", answer.Action)
+	default:
+	}
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if answer := <-i.Reply; answer.Action != "decline" {
+		t.Fatalf("Esc at options did not skip: %s", answer.Action)
+	}
+}
+
+func TestMultiQuestionReviewSubmitsLabelsAndAnswers(t *testing.T) {
+	m, i := openQuestion(t, `{"type":"object","properties":{"q0":{"type":"string","title":"Approach","enum":["safe","fast"]},"q1":{"type":"array","title":"Checks","items":{"type":"string","enum":["unit","race"]}}}}`)
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeySpace})
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.form == nil || m.form.Cursor != 1 {
+		t.Fatal("first answer did not advance")
+	}
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeySpace})
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.form == nil || !m.form.Review {
+		t.Fatal("last answer did not open the review")
+	}
+	select {
+	case <-i.Reply:
+		t.Fatal("sent before review confirmation")
+	default:
+	}
+	m.interactionKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	answer := <-i.Reply
+	if answer.Action != "accept" || answer.Content["q0"] != "safe" {
+		t.Fatalf("wrong answer: %#v", answer)
+	}
+	if values, ok := answer.Content["q1"].([]string); !ok || len(values) != 1 || values[0] != "unit" {
+		t.Fatalf("wrong multi-select answer: %#v", answer.Content["q1"])
 	}
 }
 

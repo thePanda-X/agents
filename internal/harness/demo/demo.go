@@ -177,7 +177,29 @@ func (a *agentState) prompt(ctx context.Context, session *acp.AgentSession, r *a
 		}
 		_ = emit(chunk("assistant", "Your permission choice was received. No files were changed."))
 	} else if strings.HasPrefix(text, "/question") {
-		response, err := session.CreateElicitation(ctx, &acp.CreateElicitationParams{Message: "How should I approach this refactoring?", Mode: &acp.ElicitationFormMode{RequestedSchema: acp.ElicitationSchema{Type: "object", Properties: map[string]acp.ElicitationPropertySchema{"strategy": &acp.StringPropertySchema{Title: acp.OptValue("Strategy"), Enum: acp.OptValue([]string{"conservative", "balanced", "aggressive"}), Default: acp.OptValue("balanced")}, "tests": &acp.BooleanPropertySchema{Title: acp.OptValue("Include tests"), Default: acp.OptValue(true)}}, Required: acp.OptValue([]string{"strategy", "tests"})}}})
+		preview, _ := acp.NewMeta(map[string]any{"_claude/askUserQuestionOption": map[string]any{"preview": "Keep the public API stable.\n\n- Small, reviewable commits\n- Existing tests stay green"}})
+		response, err := session.CreateElicitation(ctx, &acp.CreateElicitationParams{Message: "Please answer the following questions.", Mode: &acp.ElicitationFormMode{RequestedSchema: acp.ElicitationSchema{Type: "object", Properties: map[string]acp.ElicitationPropertySchema{
+			"question_0": &acp.StringPropertySchema{
+				Title:       acp.OptValue("Approach"),
+				Description: acp.OptValue("How should I approach this refactoring?"),
+				OneOf: acp.OptValue([]acp.EnumOption{
+					{Const: "conservative", Title: "Conservative", Description: acp.OptValue("Preserve behavior and add tests first."), Meta: acp.OptValue(preview)},
+					{Const: "balanced", Title: "Balanced", Description: acp.OptValue("Refactor the changed areas and leave the rest.")},
+					{Const: "aggressive", Title: "Aggressive", Description: acp.OptValue("Restructure the package boundaries.")},
+				}),
+			},
+			"question_0_custom": &acp.StringPropertySchema{Title: acp.OptValue("Other"), Description: acp.OptValue("Type your own answer, or add a note to the option you chose above (optional).")},
+			"question_1": &acp.MultiSelectPropertySchema{
+				Title:       acp.OptValue("Checks"),
+				Description: acp.OptValue("Which checks should I run before handing off?"),
+				Items: &acp.TitledMultiSelectItems{AnyOf: []acp.EnumOption{
+					{Const: "unit tests", Title: "Unit tests", Description: acp.OptValue("go test ./...")},
+					{Const: "race detector", Title: "Race detector", Description: acp.OptValue("go test -race ./...")},
+					{Const: "demo", Title: "Interactive demo", Description: acp.OptValue("make demo for a manual walkthrough.")},
+				}},
+			},
+			"question_1_custom": &acp.StringPropertySchema{Title: acp.OptValue("Other"), Description: acp.OptValue("Type your own answer to add to your selection above (optional).")},
+		}}}})
 		if ctx.Err() != nil {
 			return cancelled()
 		}

@@ -158,9 +158,20 @@ func TestCancelWhilePermissionIsPending(t *testing.T) {
 }
 
 func TestStructuredFormRoundTrip(t *testing.T) {
+	var shaped bool
 	client := demoClient(t, func(e harness.Event) {
 		if e.Kind == harness.InteractionRequested {
-			e.Interaction.Reply <- harness.Decision{Action: "accept", Content: map[string]any{"strategy": "balanced", "tests": true}}
+			i := e.Interaction
+			schema := string(i.Schema)
+			shaped = strings.Contains(schema, `"question_0_custom"`) &&
+				strings.Contains(schema, `"question_1_custom"`) &&
+				strings.Contains(schema, `_claude/askUserQuestionOption`) &&
+				strings.Contains(schema, `"type":"array"`)
+			i.Reply <- harness.Decision{Action: "accept", Content: map[string]any{
+				"question_0":        "balanced",
+				"question_1":        []string{"unit tests", "race detector"},
+				"question_1_custom": "lint",
+			}}
 		}
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -171,6 +182,9 @@ func TestStructuredFormRoundTrip(t *testing.T) {
 	}
 	if reason, err := client.Prompt(ctx, session.ID, harness.Prompt{Text: "/question"}); err != nil || reason != "end_turn" {
 		t.Fatalf("form roundtrip: %s, %v", reason, err)
+	}
+	if !shaped {
+		t.Fatal("demo form did not use the Claude-shaped questions and Other fields")
 	}
 }
 
