@@ -12,6 +12,7 @@ func TestSessionDatesSurviveMetadataReplayAndReady(t *testing.T) {
 	s := stateWithSession()
 	const old = "2026-10-01T10:00:00Z"
 	const updated = "2026-10-12T23:45:00.123456789-07:00"
+	s.NoteActivity("s", time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC))
 	s.Active().Info.UpdatedAt = old
 	s.Apply(harness.Event{Kind: harness.SessionsListed, Generation: 1, Sessions: []harness.SessionInfo{s.Active().Info}})
 	s.Apply(harness.Event{Kind: harness.SessionLoading, Generation: 1, SessionID: "s"})
@@ -36,6 +37,41 @@ func TestListingRefreshesPersistedConversationDate(t *testing.T) {
 	s.Apply(harness.Event{Kind: harness.SessionsListed, Generation: 1, Sessions: []harness.SessionInfo{{ID: "s", UpdatedAt: updated}}})
 	if s.Active().Info.UpdatedAt != updated {
 		t.Fatal("conversation kept stale metadata after listing")
+	}
+}
+
+func TestUnopenedSessionMetadataKeepsListDate(t *testing.T) {
+	s := NewState()
+	s.Apply(harness.Event{Kind: harness.Connecting, Generation: 1})
+	s.Apply(harness.Event{Kind: harness.SessionsListed, Generation: 1, Sessions: []harness.SessionInfo{{ID: "other", Title: "Old title", UpdatedAt: "2026-10-01T10:00:00Z"}}})
+	title, updated := "New title", "2026-10-13T10:00:00Z"
+	s.Apply(harness.Event{Kind: harness.Metadata, Generation: 1, SessionID: "other", Metadata: harness.SessionInfoPatch{Title: &title, UpdatedAt: &updated}})
+	if s.Sessions[0].UpdatedAt != "2026-10-01T10:00:00Z" {
+		t.Fatal("agent report moved an unopened session")
+	}
+	if s.Sessions[0].Title != title {
+		t.Fatal("title update should still apply to unopened sessions")
+	}
+}
+
+func TestRestoredSessionIgnoresAgentDateUpdates(t *testing.T) {
+	s := stateWithSession()
+	const old = "2026-10-01T10:00:00Z"
+	s.Active().Info.UpdatedAt = old
+	updated := "2026-10-13T10:00:00Z"
+	s.Apply(harness.Event{Kind: harness.Metadata, Generation: 1, SessionID: "s", Metadata: harness.SessionInfoPatch{UpdatedAt: &updated}})
+	if s.Active().Info.UpdatedAt != old {
+		t.Fatal("restored session moved by agent report")
+	}
+}
+
+func TestTurnStartedRecordsLocalActivity(t *testing.T) {
+	s := stateWithSession()
+	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	s.Apply(harness.Event{Kind: harness.TurnStarted, Generation: 1, SessionID: "s", Text: "hello", At: at})
+	got, ok := s.Activity("s")
+	if !ok || !got.Equal(at) {
+		t.Fatal("sent prompt did not record local activity")
 	}
 }
 

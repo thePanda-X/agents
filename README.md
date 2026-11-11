@@ -65,12 +65,15 @@ collapses to a compact heading on small terminals.
 Unsent text drafts are saved locally without a native session ID. `--resume`,
 `--session`, and selecting a saved session still load that session immediately.
 The `/sessions` (`/resume`) picker groups saved sessions by their last-activity
-date in your local timezone, newest first, with the year included. Sessions with
-missing or invalid agent timestamps appear under **Unknown date**. Agent-reported
-dates are preserved in local session references, without substituting the
-client's resume time for last activity. ACP replay does not supply
-per-message timestamps, so historical prompts omit their time rather than show
-the time you resumed them.
+date in your local timezone, newest first, with the year included. A session's
+date reflects only local activity: selecting it from the picker or sending a
+prompt stamps that moment as its last activity. Sessions you have never opened
+or used keep the agent-reported timestamp; agent reports never move unopened
+sessions. Sessions with missing or invalid timestamps appear under **Unknown
+date**. Agent-reported dates are preserved in local session references, without
+substituting the client's resume time for last activity. ACP replay does not
+supply per-message timestamps, so historical prompts omit their time rather than
+show the time you resumed them.
 Loading a saved session does not depend on metadata listing being available:
 if listing fails temporarily, a known workspace reference can still be loaded.
 Authentication failures and failures discovering an unknown workspace remain

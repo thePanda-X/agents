@@ -75,6 +75,12 @@ func TestLiveSessionDateUpdateRegroupsPickerAndPersists(t *testing.T) {
 	m.populateSessions()
 	selectListID(m.list, "s")
 	const updated = "2026-10-13T23:45:00.123456789-07:00"
+	stamp, err := time.Parse(time.RFC3339Nano, updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Selecting the session from the picker stamps its local activity time.
+	m.state.NoteActivity("s", stamp)
 	m.Update(eventMsg(harness.Event{Kind: harness.Metadata, Generation: 1, SessionID: "s", Metadata: harness.SessionInfoPatch{UpdatedAt: new(updated)}}))
 	if m.list.Items[0].ID != "s" || m.list.Items[0].Group != sessionDay(updated) {
 		t.Fatal("live date update did not move the session to the latest day")
@@ -92,5 +98,49 @@ func TestLiveSessionDateUpdateRegroupsPickerAndPersists(t *testing.T) {
 	}
 	if loaded.Workspaces[storage.Key("/workspace", m.opts.Descriptor.ID)].Session.UpdatedAt != updated {
 		t.Fatal("persisted session lost the reported offset or precision")
+	}
+}
+
+func TestUnopenedSessionMetadataDoesNotRegroup(t *testing.T) {
+	m := testModel(t)
+	m.state.Peer.Capabilities.List = true
+	m.state.Sessions = []harness.SessionInfo{
+		{ID: "old", Title: "Old", UpdatedAt: "2026-10-01T10:00:00Z"},
+		{ID: "new", Title: "New", UpdatedAt: "2026-10-12T10:00:00Z"},
+	}
+	m.openSessions()
+	m.populateSessions()
+	const phantom = "2026-10-13T10:00:00Z"
+	m.Update(eventMsg(harness.Event{Kind: harness.Metadata, Generation: 1, SessionID: "old", Metadata: harness.SessionInfoPatch{UpdatedAt: new(phantom)}}))
+	if m.list.Items[0].ID != "new" {
+		t.Fatal("agent report moved an unopened session")
+	}
+	if m.list.Items[0].Group == sessionDay(phantom) {
+		t.Fatal("agent report grouped an unopened session on its phantom date")
+	}
+}
+
+func TestOpenedSessionGroupsByLocalActivity(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("test-local", -7*60*60)
+	t.Cleanup(func() { time.Local = previousLocal })
+	m := testModel(t)
+	m.state.Peer.Capabilities.List = true
+	m.state.Sessions = []harness.SessionInfo{
+		{ID: "server-newer", Title: "Server newer", UpdatedAt: "2026-10-12T16:00:00-07:00"},
+		{ID: "opened", Title: "Opened", UpdatedAt: "2026-10-01T10:00:00Z"},
+	}
+	opened := time.Date(2026, 10, 13, 9, 0, 0, 0, time.FixedZone("test-local", -7*60*60))
+	m.state.NoteActivity("opened", opened)
+	m.openSessions()
+	m.populateSessions()
+	if m.list.Items[0].ID != "opened" {
+		t.Fatal("local activity did not take precedence over the agent date")
+	}
+	if m.list.Items[0].Group != "October 13, 2026" {
+		t.Fatalf("opened session grouped under %q", m.list.Items[0].Group)
+	}
+	if m.list.Items[0].Detail != "09:00" {
+		t.Fatalf("opened session detail %q", m.list.Items[0].Detail)
 	}
 }

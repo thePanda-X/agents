@@ -115,19 +115,31 @@ func (m *Model) populateSessions() {
 	m.list.Hint = "Enter load · Esc close"
 	m.list.GroupHeaders = true
 	sessions := append([]harness.SessionInfo(nil), m.state.Sessions...)
+	// A session's picker date is its last local open or prompt, falling back to
+	// the agent-reported timestamp only for sessions never opened or used.
+	at := make(map[string]time.Time, len(sessions))
+	parsed := make(map[string]bool, len(sessions))
+	for _, info := range sessions {
+		if local, ok := m.state.Activity(info.ID); ok {
+			at[info.ID], parsed[info.ID] = local, true
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, info.UpdatedAt); err == nil {
+			at[info.ID], parsed[info.ID] = t, true
+		}
+	}
 	slices.SortStableFunc(sessions, func(a, b harness.SessionInfo) int {
-		at, aErr := time.Parse(time.RFC3339Nano, a.UpdatedAt)
-		bt, bErr := time.Parse(time.RFC3339Nano, b.UpdatedAt)
-		if aErr != nil && bErr != nil {
+		aOK, bOK := parsed[a.ID], parsed[b.ID]
+		if !aOK && !bOK {
 			return 0
 		}
-		if aErr != nil {
+		if !aOK {
 			return 1
 		}
-		if bErr != nil {
+		if !bOK {
 			return -1
 		}
-		return bt.Compare(at)
+		return at[b.ID].Compare(at[a.ID])
 	})
 	for _, info := range sessions {
 		label := info.Title
@@ -136,10 +148,14 @@ func (m *Model) populateSessions() {
 		}
 		current := info.ID == m.state.ActiveID
 		detail := ""
-		if at, err := time.Parse(time.RFC3339Nano, info.UpdatedAt); err == nil {
-			detail = at.Local().Format("15:04")
+		group := "Unknown date"
+		previewDate := "Unknown date"
+		if t, ok := at[info.ID]; ok {
+			detail = t.Local().Format("15:04")
+			group = sessionDayAt(t)
+			previewDate = sessionDateAt(t)
 		}
-		m.list.Items = append(m.list.Items, overlays.Item{ID: info.ID, Label: label, Detail: detail, Group: sessionDay(info.UpdatedAt), Keywords: info.ID + " " + info.Workspace, Current: current, Preview: label + "\n\nWorkspace: " + info.Workspace + "\nUpdated: " + sessionDate(info.UpdatedAt) + "\nSession: " + info.ID, Value: info})
+		m.list.Items = append(m.list.Items, overlays.Item{ID: info.ID, Label: label, Detail: detail, Group: group, Keywords: info.ID + " " + info.Workspace, Current: current, Preview: label + "\n\nWorkspace: " + info.Workspace + "\nUpdated: " + previewDate + "\nSession: " + info.ID, Value: info})
 	}
 	m.list.Cursor, m.list.Scroll = cursor, scroll
 	selectListID(m.list, selectedID)
@@ -147,16 +163,24 @@ func (m *Model) populateSessions() {
 
 func sessionDate(value string) string {
 	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return at.Local().Format("Jan 2, 2006, 15:04")
+		return sessionDateAt(at)
 	}
 	return "Unknown date"
 }
 
+func sessionDateAt(at time.Time) string {
+	return at.Local().Format("Jan 2, 2006, 15:04")
+}
+
 func sessionDay(value string) string {
 	if at, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return at.Local().Format("January 2, 2006")
+		return sessionDayAt(at)
 	}
 	return "Unknown date"
+}
+
+func sessionDayAt(at time.Time) string {
+	return at.Local().Format("January 2, 2006")
 }
 
 func (m *Model) confirmDelete(item overlays.Item) {
@@ -485,6 +509,7 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 		m.stashDraft()
 		info := item.Value.(harness.SessionInfo)
 		m.sessionPending = true
+		m.state.NoteActivity(info.ID, time.Now())
 		controller := m.opts.Controller
 		return command(func() { controller.LoadSession(info) })
 	case "delete":

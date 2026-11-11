@@ -57,10 +57,26 @@ type State struct {
 	UsageLimits []harness.UsageLimit
 	Notice      string
 	LastError   error
+	// activity records the last time the user opened a session from the picker
+	// or sent a prompt in it. Only these local interactions may move a session's
+	// picker date; agent-reported updatedAt is ignored for sessions without one.
+	activity map[string]time.Time
 }
 
 func NewState() *State {
-	return &State{Connection: "starting", Conversations: make(map[string]*Conversation), TerminalOutputs: make(map[string]string)}
+	return &State{Connection: "starting", Conversations: make(map[string]*Conversation), TerminalOutputs: make(map[string]string), activity: make(map[string]time.Time)}
+}
+
+// NoteActivity records that the user opened or interacted with the session.
+// It is called by the UI when a session is selected from the picker.
+func (s *State) NoteActivity(id string, at time.Time) {
+	s.activity[id] = at
+}
+
+// Activity returns the last local open/interaction time for a session, if any.
+func (s *State) Activity(id string) (time.Time, bool) {
+	at, ok := s.activity[id]
+	return at, ok
 }
 
 func (s *State) Active() *Conversation { return s.Conversations[s.ActiveID] }
@@ -178,6 +194,7 @@ func (s *State) Apply(e harness.Event) bool {
 			s.Notice = ""
 			c.Busy, c.Cancelling, c.StartedAt, c.StopReason = true, false, e.At, ""
 			s.LastError = nil
+			s.activity[e.SessionID] = e.At
 			// The agent may echo this prompt. The reducer reconciles its first
 			// user chunk with this optimistic entry instead of duplicating it.
 			entry := &Entry{Kind: "message", Role: "user", Text: e.Text, At: e.At, ID: "local", Revision: 1}
@@ -225,17 +242,23 @@ func (s *State) Apply(e harness.Event) bool {
 			if patch.Title == nil && e.Text != "" {
 				patch.Title = &e.Text
 			}
-			applyMetadata(&c.Info, patch)
+			// Titles may always refresh. updatedAt only reflects local activity:
+			// agent reports must not move sessions the user never opened or used.
+			allowed := harness.SessionInfoPatch{Title: patch.Title}
+			if _, opened := s.activity[e.SessionID]; opened {
+				allowed.UpdatedAt = patch.UpdatedAt
+			}
+			applyMetadata(&c.Info, allowed)
 			for i := range s.Sessions {
 				if s.Sessions[i].ID == e.SessionID {
-					applyMetadata(&s.Sessions[i], patch)
+					applyMetadata(&s.Sessions[i], allowed)
 				}
 			}
 			if patch.Title != nil {
 				c.pendingMetadata.Title = patch.Title
 			}
-			if patch.UpdatedAt != nil {
-				c.pendingMetadata.UpdatedAt = patch.UpdatedAt
+			if allowed.UpdatedAt != nil {
+				c.pendingMetadata.UpdatedAt = allowed.UpdatedAt
 			}
 		}
 	}
