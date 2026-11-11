@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"agents/internal/app"
+	"agents/internal/harness"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -69,6 +70,60 @@ func TestNestedMarkdownUsesAvailableWidth(t *testing.T) {
 			if strings.Count(ansi.Strip(rendered), "Readable") != 40 {
 				t.Fatal("nested Markdown lost text")
 			}
+		}
+	}
+}
+
+// TestUnbreakableTokensNeverExceedWidth guards the invariant that rendered
+// transcript rows never exceed the viewport width, even when content contains
+// tokens that cannot wrap at word boundaries (long URLs, code lines, base64,
+// diff lines, and so on). Lines wider than the budget must be hard-broken,
+// never left to overflow into horizontal panning.
+func TestUnbreakableTokensNeverExceedWidth(t *testing.T) {
+	token := strings.Repeat("abcdefgh", 25)
+	longURL := "https://example.com/" + strings.Repeat("seg", 30)
+	cases := []struct {
+		name   string
+		entry  *app.Entry
+		needle string
+	}{
+		{"assistant link", &app.Entry{Role: "assistant", Text: "See " + longURL + " for details."}, longURL},
+		{"assistant code", &app.Entry{Role: "assistant", Text: "```go\n" + strings.Repeat("x", 200) + "\n```"}, strings.Repeat("x", 200)},
+		{"user token", &app.Entry{Role: "user", Text: "paste " + token}, token},
+		{"thought token", &app.Entry{Role: "thought", Text: token + " reasoning"}, token},
+		{"tool input", &app.Entry{ID: "tool", Tool: &app.ToolState{Title: "Write file.go", Status: "completed", Input: rawToolData(t, map[string]string{"file_path": "f.go", "content": token})}}, token},
+		{"tool diff", &app.Entry{ID: "tool", Tool: &app.ToolState{Title: "Edit file.go", Status: "completed", Diffs: []harness.Diff{{Path: "f.go", OldText: "old", NewText: "newline\n" + token}}}}, token},
+	}
+	for _, tc := range cases {
+		for _, width := range []int{28, 60} {
+			t.Run(tc.name+"/w="+fmt.Sprint(width), func(t *testing.T) {
+				c := &app.Conversation{Entries: []*app.Entry{tc.entry}}
+				content, positions := New().Render(c, Options{Width: width, Thoughts: true, Expanded: map[string]bool{"tool": true}})
+				lines := strings.Split(content, "\n")
+				for i, line := range lines {
+					if got := ansi.StringWidth(ansi.Strip(line)); got > width {
+						t.Fatalf("line %d exceeds width %d: %q (%d cells)", i, width, line, got)
+					}
+				}
+				for i, pos := range positions {
+					if pos >= len(lines) {
+						t.Fatalf("entry %d position %d beyond rendered rows %d", i, pos, len(lines))
+					}
+				}
+				// Hard breaks insert only newlines and trailing spaces; the
+				// multiline left rail repeats the │ border per row. Stripping
+				// those must restore the original token sequence, proving no
+				// content was dropped.
+				compact := strings.Map(func(r rune) rune {
+					if r == ' ' || r == '\n' || r == '│' {
+						return -1
+					}
+					return r
+				}, ansi.Strip(content))
+				if !strings.Contains(compact, tc.needle) {
+					t.Fatal("hard wrapping lost token content")
+				}
+			})
 		}
 	}
 }

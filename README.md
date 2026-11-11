@@ -354,7 +354,12 @@ an entry before advancing to the next/previous matching entry.
 
 Markdown tables use bold headers, padded columns, and horizontal rules between
 data rows. Padding tightens on narrow terminals while long cells still wrap;
-rules separate logical rows, not individual wrapped lines.
+rules separate logical rows, not individual wrapped lines. Content that cannot
+wrap at word boundaries — long URLs, wide code lines, base64, and diff lines —
+is hard-broken at the transcript width rather than left to overflow, so the
+conversation never horizontally scrolls. The mouse wheel scrolls vertically
+only; horizontal wheel gestures (tilt, trackpad swipes, shift+wheel) are
+ignored.
 
 ### Large text pastes
 

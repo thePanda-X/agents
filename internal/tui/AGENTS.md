@@ -60,6 +60,11 @@ hierarchy, discoverable commands, and preservation of drafts and reading positio
 - Compact activity blocks stay dense, with one blank row at activity/response
   boundaries. Transcript text uses the available width rather than a fixed prose
   cap; account for gutters and message chrome without narrowing code/diffs.
+- Transcript lines never exceed the viewport width: unbreakable tokens, long
+  code lines, wide tables, and diff lines are hard-broken (ANSI-safe) instead of
+  overflowing, so horizontal panning stays impossible. Mouse wheel scrolls
+  vertically only; horizontal wheel gestures (tilt, trackpad swipes, shift+wheel)
+  are ignored.
 - Preserve reading anchors across density changes, resizing, folding, and updates.
 - Explicit `Expanded` map values override global thought visibility, including
   `false`. Absence means use the global preference.

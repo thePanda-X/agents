@@ -238,7 +238,7 @@ func (m *Model) openInfo(title, content string) {
 	m.overlay, m.infoTitle = "info", title
 	m.infoContent = content
 	m.sizeInfo()
-	wrapped := lipgloss.Wrap(content, m.info.Width(), " ")
+	wrapped := transcript.NormalizeWidth(lipgloss.Wrap(content, m.info.Width(), " "), m.info.Width())
 	m.info.SoftWrap = false
 	m.info.SetContent(wrapped)
 	for index, line := range strings.Split(wrapped, "\n") {

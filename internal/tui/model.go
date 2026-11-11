@@ -465,6 +465,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
 		cmds = append(cmds, m.handleMouse(msg.(tea.MouseMsg)))
 	case tea.MouseWheelMsg:
+		// Ignore horizontal wheel gestures (wheel tilt, trackpad swipes, and
+		// shift+wheel on terminals that map it to horizontal). The transcript
+		// and info pager scroll vertically only; horizontal panning of wide
+		// lines is never intended.
+		if msg.Button == tea.MouseWheelLeft || msg.Button == tea.MouseWheelRight || msg.Mod.Contains(tea.ModShift) {
+			break
+		}
 		if m.overlay == "info" {
 			var cmd tea.Cmd
 			m.info, cmd = m.info.Update(msg)
@@ -528,7 +535,7 @@ func (m *Model) resize() {
 	m.viewport.SetHeight(newHeight)
 	m.sizeInfo()
 	if m.overlay == "info" && m.infoContent != "" {
-		wrapped := lipgloss.Wrap(m.infoContent, m.info.Width(), " ")
+		wrapped := transcript.NormalizeWidth(lipgloss.Wrap(m.infoContent, m.info.Width(), " "), m.info.Width())
 		m.info.SetContent(wrapped)
 		m.infoHunks = nil
 		for index, line := range strings.Split(wrapped, "\n") {

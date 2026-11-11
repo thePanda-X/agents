@@ -44,6 +44,40 @@ func TestResponsiveViewStaysInsideTerminal(t *testing.T) {
 	}
 }
 
+// TestWheelNeverScrollsHorizontally ensures mouse wheel gestures only scroll the
+// transcript vertically. Horizontal wheel events (wheel tilt, trackpad swipes)
+// and shift+wheel are ignored, so wide content can never trigger horizontal
+// panning of the view.
+func TestWheelNeverScrollsHorizontally(t *testing.T) {
+	m := seedScrollableSession(t)
+	// Add content wider than the viewport so horizontal panning would be
+	// possible if the wheel were forwarded.
+	m.state.Active().Entries = append(m.state.Active().Entries, &app.Entry{Role: "assistant", Text: "wide " + strings.Repeat("x", 200)})
+	m.refresh()
+	m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	if m.following {
+		t.Fatal("fixture must detach on wheel up")
+	}
+	if m.viewport.XOffset() != 0 {
+		t.Fatal("fixture should start at horizontal offset 0")
+	}
+	for _, btn := range []tea.MouseButton{tea.MouseWheelLeft, tea.MouseWheelRight} {
+		m.Update(tea.MouseWheelMsg(tea.Mouse{Button: btn}))
+		if m.viewport.XOffset() != 0 {
+			t.Fatalf("horizontal wheel button %v panned the transcript", btn)
+		}
+	}
+	m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp, Mod: tea.ModShift}))
+	if m.viewport.XOffset() != 0 {
+		t.Fatal("shift+wheel panned the transcript")
+	}
+	before := m.viewport.YOffset()
+	m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	if m.viewport.YOffset() >= before {
+		t.Fatal("vertical wheel stopped scrolling")
+	}
+}
+
 func TestTranscriptRetainsScrollPositionDuringStreaming(t *testing.T) {
 	m := testModel(t)
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

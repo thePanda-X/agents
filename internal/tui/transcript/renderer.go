@@ -50,9 +50,9 @@ func (r *Renderer) Detail(entry *app.Entry, width int, terminals map[string]stri
 		return theme.Quiet.Render("No reasoning text was supplied by the agent.")
 	}
 	if rendered, err := newMarkdownRenderer(max(10, width)).Render(text); err == nil {
-		return strings.Trim(rendered, "\n")
+		return strings.Trim(NormalizeWidth(rendered, max(10, width)), "\n")
 	}
-	return text
+	return NormalizeWidth(text, max(10, width))
 }
 
 type Options struct {
@@ -186,6 +186,7 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 			} else {
 				block += theme.Quiet.Render(" · collapsed")
 			}
+			block = NormalizeWidth(block, width-2)
 		} else {
 			expanded := false
 			if entry.Role == "user" && LargeText(entry.Text) {
@@ -244,6 +245,10 @@ func (r *Renderer) message(entry *app.Entry, width int, compact, expanded bool) 
 			}
 			text = strings.Trim(text, "\n")
 		}
+		// Hard-break any line still wider than the content budget (long tokens,
+		// code lines, wide tables, diffs) so the transcript never overflows its
+		// viewport and horizontal scrolling stays impossible.
+		text = NormalizeWidth(text, width-2)
 		block := lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(2).Render(""), text)
 		value = cached{revision: entry.Revision, width: width, compact: compact, expanded: expanded, at: entry.At,
 			role: entry.Role, source: entry.Text, text: text, block: block, height: lipgloss.Height(block)}
@@ -288,10 +293,10 @@ func renderUser(entry *app.Entry, width int, compact, expanded bool) string {
 	if compact {
 		padding = 0
 	}
-	return theme.Body.Background(theme.Surface).
+	return NormalizeWidth(theme.Body.Background(theme.Surface).
 		Border(lipgloss.Border{Left: "│"}, false, false, false, true).
 		BorderForeground(theme.Pink).
-		Padding(padding, 1).Width(width - 2).Render(block)
+		Padding(padding, 1).Width(width-2).Render(block), width-2)
 }
 
 // thoughtDuration reports how long a reasoning block took, using the next
@@ -364,6 +369,38 @@ func highlightSearchMatch(block string, search *regexp.Regexp, current int) stri
 	return strings.Join(lines, "\n")
 }
 
+// NormalizeWidth hard-breaks any rendered line wider than width so transcript
+// text never exceeds its viewport. Lines already within budget are returned
+// unchanged, keeping existing wrapping and caches stable. ANSI styling and wide
+// runes are preserved.
+func NormalizeWidth(block string, width int) string {
+	if width < 1 {
+		return block
+	}
+	lines := strings.Split(block, "\n")
+	changed := false
+	for i, line := range lines {
+		if ansi.StringWidth(line) <= width {
+			continue
+		}
+		wrapped := ansi.Wrap(line, width, "")
+		for _, part := range strings.Split(wrapped, "\n") {
+			if ansi.StringWidth(part) > width {
+				// Degenerate cases such as a single grapheme wider than the
+				// limit: fall back to truncation rather than risking overflow.
+				wrapped = ansi.Truncate(line, width, "")
+				break
+			}
+		}
+		lines[i] = wrapped
+		changed = true
+	}
+	if !changed {
+		return block
+	}
+	return strings.Join(lines, "\n")
+}
+
 var toolSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]string, width, spinnerFrame int) string {
@@ -408,7 +445,7 @@ func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]st
 	if len(t.Output) > 0 {
 		parts = append(parts, theme.Quiet.Render("Output"), pretty(t.Output))
 	}
-	return lipgloss.Wrap(strings.Join(parts, "\n"), width, " ")
+	return NormalizeWidth(lipgloss.Wrap(strings.Join(parts, "\n"), width, " "), width)
 }
 
 func RenderDiff(diff harness.Diff) string {
