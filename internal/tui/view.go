@@ -169,7 +169,14 @@ func (m *Model) conversationView() string {
 	if m.viewport.Height() < 5 {
 		return lipgloss.NewStyle().Width(m.viewport.Width()).Height(m.viewport.Height()).MaxHeight(m.viewport.Height()).Render(theme.Quiet.Render(guidance))
 	}
-	intro := theme.Heading.Render("agents") + "\n\n" + theme.Body.Render(lipgloss.Wrap(status, m.viewport.Width(), " ")) + "\n\n" + theme.Quiet.Render(lipgloss.Wrap(guidance, m.viewport.Width(), " "))
+	intro := theme.Heading.Render("agents")
+	// The ASCII wordmark belongs to the fresh-session landing screen: show it
+	// only when the harness is ready and the viewport can hold it without
+	// clipping. Smaller or transient states keep the compact heading.
+	if banner, ok := renderBanner(m.viewport.Width()); ok && m.state.Connection == "ready" && m.viewport.Height() >= 12 {
+		intro = banner
+	}
+	intro += "\n\n" + theme.Body.Render(lipgloss.Wrap(status, m.viewport.Width(), " ")) + "\n\n" + theme.Quiet.Render(lipgloss.Wrap(guidance, m.viewport.Width(), " "))
 	return lipgloss.NewStyle().Width(m.viewport.Width()).Height(m.viewport.Height()).MaxHeight(m.viewport.Height()).Align(lipgloss.Center, lipgloss.Center).Render(intro)
 }
 

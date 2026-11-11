@@ -18,6 +18,10 @@ import (
 )
 
 func testModel(t *testing.T) *Model {
+	return newTestModel(t, true)
+}
+
+func newTestModel(t *testing.T, withSession bool) *Model {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -28,7 +32,9 @@ func testModel(t *testing.T) *Model {
 	m := New(Options{Context: ctx, Controller: app.NewController(ctx), Registry: registry, Descriptor: demo.Descriptor(), Agent: harness.Options{Workspace: "/workspace"}, Settings: storage.Settings{Mouse: true}, Snapshot: storage.Snapshot{Version: 1, Workspaces: make(map[string]storage.WorkspaceState)}})
 	m.state.Apply(harness.Event{Kind: harness.Connecting, Generation: 1})
 	m.state.Apply(harness.Event{Kind: harness.Connected, Generation: 1})
-	m.state.Apply(harness.Event{Kind: harness.SessionReady, Generation: 1, Session: harness.Session{SessionInfo: harness.SessionInfo{ID: "s", Workspace: "/workspace"}}})
+	if withSession {
+		m.state.Apply(harness.Event{Kind: harness.SessionReady, Generation: 1, Session: harness.Session{SessionInfo: harness.SessionInfo{ID: "s", Workspace: "/workspace"}}})
+	}
 	return m
 }
 

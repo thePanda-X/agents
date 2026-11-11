@@ -60,6 +60,8 @@ directly with `.\bin\agents.exe --demo`.
 Agents connects to the harness on startup and normally creates a fresh session when
 you send the first nonempty prompt (text or attachments). Opening and closing the
 client, browsing commands, or choosing `/new` does not create an empty session.
+Before any session exists, the launch screen shows an ASCII-art wordmark that
+collapses to a compact heading on small terminals.
 Unsent text drafts are saved locally without a native session ID. `--resume`,
 `--session`, and selecting a saved session still load that session immediately.
 The `/sessions` (`/resume`) picker groups saved sessions by their last-activity
