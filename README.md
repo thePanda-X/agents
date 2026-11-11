@@ -227,6 +227,8 @@ With mouse support enabled in `/settings`, left-drag response text to highlight
 it, then **right-click** in the transcript or press **y** to copy just that text.
 Ctrl+Y and `/copy` (`/yank`) also prefer highlighted text. **Esc** or a new click
 clears highlighting; typing in the composer resumes normal draft editing.
+Highlighting hugs the text itself: trailing filler, gutters, and blank rows are
+never selected, and a drag that never touches text leaves no selection.
 Highlighted text uses a muted plum background with light text; Terminal default
 appearance uses reverse video so selections stay visible without application colors.
 Selections in messages copy the original text the agent or you sent (Markdown source,

@@ -42,6 +42,14 @@ func (s TextSelection) Text(content string) string {
 		left, right := s.span(lines[row], row)
 		selected = append(selected, strings.TrimRight(theme.Clean(ansi.Cut(lines[row], left, right)), " "))
 	}
+	// Drop blank rows at the selection edges so a drag anchored on a
+	// separator row does not copy stray empty lines.
+	for len(selected) > 0 && selected[0] == "" {
+		selected = selected[1:]
+	}
+	for len(selected) > 0 && selected[len(selected)-1] == "" {
+		selected = selected[:len(selected)-1]
+	}
 	return strings.Join(selected, "\n")
 }
 
@@ -100,6 +108,14 @@ func (s TextSelection) Source(content string, entries []*app.Entry, positions []
 			continue
 		}
 		out = append(out, locate(raw, rendered, p.hint))
+	}
+	// Drop blank parts at the edges so a selection anchored on a separator row
+	// does not copy stray empty lines; interior separators stay.
+	for len(out) > 0 && out[0] == "" {
+		out = out[1:]
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
 	}
 	return strings.Join(out, "\n\n")
 }
@@ -180,13 +196,17 @@ func (s TextSelection) Highlight(content string, style lipgloss.Style) string {
 func (s TextSelection) span(line string, row int) (int, int) {
 	start, end := s.Bounds()
 	plain := ansi.Strip(line)
-	width := ansi.StringWidth(plain)
-	left, right := min(2, width), width
+	// Rows are padded to a block's widest line or the content budget, so the
+	// selection hugs only the visible glyphs: right-hand filler stays out.
+	extent := ansi.StringWidth(strings.TrimRight(plain, " "))
+	left, right := min(2, extent), extent
 	if row == start.Row {
 		left, _ = cellBounds(plain, max(2, start.Column))
+		left = min(left, extent)
 	}
 	if row == end.Row {
 		_, right = cellBounds(plain, max(2, end.Column))
+		right = min(right, extent)
 	}
 	return left, max(left, right)
 }

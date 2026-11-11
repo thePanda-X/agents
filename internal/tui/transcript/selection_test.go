@@ -63,6 +63,46 @@ func TestTextSelectionPreservesCodeIndentationAndSkipsGutterAndPadding(t *testin
 	}
 }
 
+func TestTextSelectionHighlightSkipsPaddedTrailingCells(t *testing.T) {
+	// Rows are padded to a block's widest line; the highlight must stop at the
+	// visible glyphs and leave the filler unstyled.
+	content := "┃ short line        \n┃ much longer line here\n  \n┃ last "
+	selection := TextSelection{Anchor: TextPosition{0, 2}, Head: TextPosition{3, 6}}
+	highlighted := selection.Highlight(content, theme.TextSelection)
+	row0, line0 := strings.Split(content, "\n")[0], strings.Split(highlighted, "\n")[0]
+	want0 := ansi.Cut(row0, 0, 2) + theme.TextSelection.Render("short line") + ansi.Cut(row0, 12, ansi.StringWidth(row0))
+	if line0 != want0 {
+		t.Fatalf("row 0 got %q, want %q", line0, want0)
+	}
+	if ansi.Strip(highlighted) != ansi.Strip(content) || lipgloss.Width(highlighted) != lipgloss.Width(content) {
+		t.Fatal("highlighting changed rendered text or width")
+	}
+	if got := selection.Text(content); got != "short line\nmuch longer line here\n\nlast" {
+		t.Fatalf("copied %q", got)
+	}
+}
+
+func TestTextSelectionEndpointSnapsToVisibleGlyphs(t *testing.T) {
+	content := "  xyz       "
+	selection := TextSelection{Anchor: TextPosition{0, 2}, Head: TextPosition{0, 40}}
+	if got := selection.Text(content); got != "xyz" {
+		t.Fatalf("copied %q", got)
+	}
+	highlighted := selection.Highlight(content, theme.TextSelection)
+	want := ansi.Cut(content, 0, 2) + theme.TextSelection.Render("xyz") + "       "
+	if highlighted != want {
+		t.Fatalf("got %q, want %q", highlighted, want)
+	}
+}
+
+func TestTextSelectionDropsBlankEdgeRows(t *testing.T) {
+	content := "  \n  first line\n  second line\n  "
+	selection := TextSelection{Anchor: TextPosition{0, 2}, Head: TextPosition{3, 6}}
+	if got := selection.Text(content); got != "first line\nsecond line" {
+		t.Fatalf("copied %q", got)
+	}
+}
+
 func TestTextSelectionNeverSplitsUnicodeGraphemes(t *testing.T) {
 	for _, text := range []string{"界", "🙂", "👩‍💻", "e\u0301"} {
 		content := "  a" + text + "z"

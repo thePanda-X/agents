@@ -345,3 +345,74 @@ func TestTextSelectionAccountsForHorizontalScrollAndLegacyRelease(t *testing.T) 
 	}
 	requireClipboardText(t, m.copyTextSelection(), "target")
 }
+
+func TestSelectionStartedOnBlankRowCopiesCleanly(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.state.Active().Entries = []*app.Entry{
+		{Role: "assistant", Text: "First response."},
+		{Role: "assistant", Text: "Second response."},
+	}
+	m.refresh()
+
+	lines := strings.Split(m.transcriptContent, "\n")
+	blank, second := -1, -1
+	for i, line := range lines {
+		plain := ansi.Strip(line)
+		switch {
+		case second < 0 && strings.Contains(plain, "Second response."):
+			second = i
+		case blank < 0 && second < 0 && strings.TrimSpace(plain) == "":
+			blank = i
+		}
+	}
+	if blank < 0 || second < 0 {
+		t.Fatalf("fixture missing blank row (%d) or second entry (%d)", blank, second)
+	}
+	x, y := m.transcriptOrigin()
+	start := tea.Mouse{X: x + 3, Y: y + blank, Button: tea.MouseLeft}
+	end := tea.Mouse{X: x + ansi.StringWidth(ansi.Strip(lines[second])) - 1, Y: y + second, Button: tea.MouseLeft}
+	m.Update(tea.MouseClickMsg(start))
+	m.Update(tea.MouseMotionMsg(end))
+	m.Update(tea.MouseReleaseMsg(end))
+	if !m.hasTextSelection() {
+		t.Fatal("drag from blank row to text did not select")
+	}
+	if got := m.textSelection.Text(m.transcriptContent); got != "Second response." {
+		t.Fatalf("selected %q", got)
+	}
+	requireClipboardText(t, m.copyTextSelection(), "Second response.")
+}
+
+func TestSelectionWithoutCopyableTextClearsOnRelease(t *testing.T) {
+	m := testModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.state.Active().Entries = []*app.Entry{
+		{Role: "assistant", Text: "First response."},
+		{Role: "assistant", Text: "Second response."},
+	}
+	m.refresh()
+
+	lines := strings.Split(m.transcriptContent, "\n")
+	blank := -1
+	for i, line := range lines {
+		if blank < 0 && i > 0 && i < len(lines)-1 && strings.TrimSpace(ansi.Strip(line)) == "" {
+			blank = i
+		}
+	}
+	if blank < 0 {
+		t.Fatal("no blank separator row found")
+	}
+	m.textSelection = &textSelection{
+		TextSelection: transcript.TextSelection{Anchor: transcript.TextPosition{Row: blank, Column: 12}, Head: transcript.TextPosition{Row: blank, Column: 4}},
+		conversation:  m.state.Active(),
+		width:         m.viewport.Width(),
+		dragging:      true,
+		moved:         true,
+	}
+	x, y := m.transcriptOrigin()
+	m.Update(tea.MouseReleaseMsg(tea.Mouse{X: x + 3, Y: y + blank, Button: tea.MouseLeft}))
+	if m.textSelection != nil || m.hasTextSelection() {
+		t.Fatal("whitespace-only selection survived release")
+	}
+}

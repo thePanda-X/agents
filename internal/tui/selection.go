@@ -17,6 +17,7 @@ type textSelection struct {
 	width        int
 	dragging     bool
 	moved        bool
+	copyable     bool // any spanned row contains copyable text
 	link         string
 }
 
@@ -97,6 +98,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if link != "" && m.linkAt(mouse) == link {
 					return openLink(m.opts.Context, link)
 				}
+			} else if !m.textSelection.copyable {
+				// A drag that never touched copyable text leaves no selection.
+				m.clearTextSelection()
 			}
 		}
 	}
@@ -107,6 +111,7 @@ func (m *Model) extendTextSelection(mouse tea.Mouse) {
 	s := m.textSelection
 	s.Head = m.textPosition(mouse)
 	s.moved = s.moved || s.Head != s.Anchor
+	s.copyable = s.copyable || strings.TrimSpace(s.Text(m.transcriptContent)) != ""
 	m.setTranscriptContent()
 }
 
