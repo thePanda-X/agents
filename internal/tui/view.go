@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -31,9 +32,6 @@ func (m *Model) View() tea.View {
 		parts = append(parts, m.attachmentView())
 	}
 	parts = append(parts, m.composer(width))
-	if !m.opts.Settings.Compact {
-		parts = append(parts, m.configLine(width))
-	}
 	parts = append(parts, m.footer(width))
 	content := strings.Join(parts, "\n")
 	base := lipgloss.NewStyle().Background(theme.Background).Foreground(theme.Text).Width(m.width).Height(m.height).MaxWidth(m.width).MaxHeight(m.height).Padding(0, 2).Render(content)
@@ -47,7 +45,7 @@ func (m *Model) View() tea.View {
 	}
 	v := tea.NewView(base)
 	v.AltScreen, v.BackgroundColor, v.ForegroundColor = true, theme.Background, theme.Text
-	v.WindowTitle = "Agents · " + theme.Clean(m.opts.Descriptor.Name)
+	v.WindowTitle = m.windowTitle()
 	if m.opts.Settings.Appearance == "terminal" {
 		v.Content = theme.TerminalDefault(v.Content)
 		v.BackgroundColor, v.ForegroundColor = nil, nil
@@ -58,6 +56,35 @@ func (m *Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
+}
+
+func (m *Model) windowTitle() string {
+	c := m.state.Active()
+	status := ""
+	if c != nil {
+		switch {
+		case c.Cancelling:
+			status = "Cancelling"
+		case c.Loading:
+			status = "Loading"
+		case c.Busy:
+			status = "Responding"
+		}
+	}
+	if status == "" && m.state.Connection == "disconnected" {
+		status = "Disconnected"
+	}
+	var parts []string
+	if status != "" {
+		parts = append(parts, status)
+	}
+	if c != nil {
+		if title := strings.Join(strings.Fields(theme.Clean(c.Info.Title)), " "); title != "" {
+			parts = append(parts, title)
+		}
+	}
+	parts = append(parts, "Agents")
+	return strings.Join(parts, " · ")
 }
 
 func (m *Model) header(width int) string {
@@ -169,7 +196,7 @@ func (m *Model) activity(width int) string {
 			if m.opts.Settings.ReducedMotion {
 				frame = "●"
 			}
-			left = theme.Accent.Render(frame) + theme.Quiet.Render(" Working · "+elapsedTime(time.Since(c.StartedAt)))
+			left = theme.Accent.Render(frame) + theme.Quiet.Render(" Responding… "+elapsedTime(time.Since(c.StartedAt)))
 		}
 	}
 	right := ""
@@ -213,52 +240,101 @@ func (m *Model) composer(width int) string {
 	if !m.focusedTranscript && m.list == nil && m.interaction == nil && m.overlay == "" {
 		border = theme.Pink
 	}
-	return lipgloss.NewStyle().Background(theme.Surface).Border(lipgloss.RoundedBorder()).BorderForeground(border).Padding(0, 1).Width(width).Render(m.input.View())
+	frame := lipgloss.NewStyle().
+		Background(theme.Surface).
+		Border(lipgloss.RoundedBorder(), true, true, false, true).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(width)
+	return frame.Render(m.input.View()) + "\n" + composerBottom(width, m.composerMeta(), border)
 }
 
-func (m *Model) configLine(width int) string {
-	var labels []string
-	if c := m.state.Active(); c != nil {
-		for _, option := range c.Options {
-			if option.Category != "model" && option.Category != "thought_level" && option.Category != "mode" && option.Category != "model_config" {
-				continue
+// composerMeta labels the composer's bottom border with the advertised model,
+// effort, and mode. Values are kept instead of option names so the frame stays
+// compact, mirroring how agent TUIs summarize the active configuration.
+func (m *Model) composerMeta() string {
+	c := m.state.Active()
+	if c == nil {
+		return ""
+	}
+	var models, effort, modes []string
+	for _, option := range c.Options {
+		value := fmt.Sprint(option.Value)
+		for _, choice := range option.Choices {
+			if choice.Value == option.Value {
+				value = choice.Name
+				break
 			}
-			name := fmt.Sprint(option.Value)
-			for _, choice := range option.Choices {
-				if choice.Value == option.Value {
-					name = choice.Name
-					break
-				}
-			}
-			label := option.Name
-			if option.Category == "thought_level" {
-				label = "Effort"
-			}
-			labels = append(labels, theme.Clean(label+": "+name))
+		}
+		value = theme.Clean(value)
+		if value == "" {
+			continue
+		}
+		switch option.Category {
+		case "model", "model_config":
+			models = append(models, value)
+		case "thought_level":
+			effort = append(effort, value)
+		case "mode":
+			modes = append(modes, value)
 		}
 	}
-	return theme.Quiet.Width(width).Align(lipgloss.Right).Render(ansi.Truncate(strings.Join(labels, " · "), width, "…"))
+	label := strings.Join(models, " · ")
+	if value := strings.Join(effort, " · "); value != "" {
+		if label == "" {
+			label = value
+		} else {
+			label += " (" + value + ")"
+		}
+	}
+	if value := strings.Join(modes, " · "); value != "" {
+		if label != "" {
+			label += " · "
+		}
+		label += value
+	}
+	return label
+}
+
+// composerBottom draws the frame's bottom edge with an optional right-aligned
+// label. Lipgloss borders cannot contain text, so the line is composed here and
+// measured in cells to keep the composer exactly width columns wide.
+func composerBottom(width int, label string, color color.Color) string {
+	border := lipgloss.RoundedBorder()
+	inner := max(0, width-2)
+	lineStyle := lipgloss.NewStyle().Foreground(color).Background(theme.Surface)
+	labelStyle := theme.Quiet.Background(theme.Surface)
+	text := ""
+	if label != "" && width >= 40 {
+		text = ansi.Truncate(" "+label+" ", max(0, inner-1), "…")
+	}
+	if text == "" {
+		return lineStyle.Render(border.BottomLeft + strings.Repeat(border.Bottom, inner) + border.BottomRight)
+	}
+	fill := max(0, inner-lipgloss.Width(text))
+	return lineStyle.Render(border.BottomLeft+strings.Repeat(border.Bottom, fill)) +
+		labelStyle.Render(text) + lineStyle.Render(border.BottomRight)
 }
 
 func (m *Model) footer(width int) string {
 	mode := "COMPOSE"
-	enter := "Enter send"
+	enter := "Enter:send"
 	if name, _, ok := parseSlashInvocation(m.input.Value()); ok && name != "" {
 		if local, found := findLocalCommand(name); found && local.Name != "agent" {
-			enter = "Enter run local"
+			enter = "Enter:run local"
 		} else {
-			enter = "Enter send to " + theme.Clean(m.opts.Descriptor.Name)
+			enter = "Enter:send to " + theme.Clean(m.opts.Descriptor.Name)
 		}
 	}
-	hints := enter + " · Ctrl+J newline · " + m.binding("palette") + " commands"
+	hints := []string{enter, m.binding("palette") + ":commands", "Ctrl+J:newline", "Tab:browse"}
 	if m.focusedTranscript {
 		mode = "BROWSE"
-		hints = "j/k scroll · Enter fold · ↑↓ entries · ? help"
+		hints = []string{"j/k:scroll", "Enter:fold", "↑↓:entries", "?:help"}
 	}
 	if width < 70 {
-		hints = enter + " · Tab browse"
+		hints = []string{enter, "Tab:browse"}
 		if m.focusedTranscript {
-			hints = "j/k scroll · i compose"
+			hints = []string{"j/k:scroll", "i:compose"}
 		}
 	}
 	if m.list != nil {
@@ -270,46 +346,48 @@ func (m *Model) footer(width int) string {
 	left := theme.Accent.Bold(true).Render(mode)
 	if m.focusedTranscript {
 		if c := m.state.Active(); c != nil && len(c.Entries) > 0 {
-			left += theme.Quiet.Render(fmt.Sprintf(" · %d/%d", m.selected+1, len(c.Entries)))
+			left += theme.Quiet.Render(fmt.Sprintf(" %d/%d", m.selected+1, len(c.Entries)))
 		}
 	}
 	if m.opts.Settings.Compact {
-		hints = m.binding("palette") + " commands"
+		hints = []string{m.binding("palette") + ":commands"}
 		if m.focusedTranscript {
-			hints = "? help"
-		}
-		config := strings.TrimSpace(theme.Clean(m.configLine(width)))
-		if config != "" {
-			left += theme.Quiet.Render(" · " + config)
+			hints = []string{"?:help"}
 		}
 	}
 	if width < 40 {
-		hints = "Enter send · Tab"
-		if enter == "Enter run local" {
-			hints = "Enter local · Tab"
-		} else if enter != "Enter send" {
-			hints = "Enter agent · Tab"
-		}
+		hints = []string{enter, "Tab"}
 		if m.focusedTranscript {
-			hints = "j/k · i compose"
+			hints = []string{"j/k:scroll", "i:compose"}
 		}
 	}
 	buffer := m.drafts[m.draftKey()]
 	if buffer != nil && len(buffer.Pastes) > 0 && !m.focusedTranscript && m.overlay == "" && m.list == nil && m.interaction == nil {
-		hints = enter + " · " + m.binding("pastes") + " pastes · " + m.binding("editor") + " edit"
+		hints = []string{enter, m.binding("pastes") + ":pastes", m.binding("editor") + ":edit"}
 		if width < 70 {
-			hints = enter + " · " + m.binding("pastes") + " pastes"
+			hints = []string{enter, m.binding("pastes") + ":pastes"}
 		}
 		if width < 40 {
-			hints = m.binding("pastes") + " pastes"
+			hints = []string{m.binding("pastes") + ":pastes"}
 		}
 	}
 	if m.hasTextSelection() && m.overlay == "" && m.list == nil && m.interaction == nil {
 		left = theme.Accent.Bold(true).Render("SELECT")
-		hints = "y / right-click copy · Esc clear"
-		if width < 50 {
-			hints = "y copy · Esc clear"
-		}
+		hints = []string{"y:copy", "Esc:clear"}
 	}
-	return theme.Line(left, theme.Quiet.Render(hints), width)
+	return footerLine(left, hints, width)
+}
+
+// footerLine joins the mode chip and key:action hints, dropping trailing hints
+// that do not fit instead of truncating a segment in half.
+func footerLine(left string, hints []string, width int) string {
+	line := left
+	for _, hint := range hints {
+		next := line + theme.Quiet.Render(" │ ") + theme.Quiet.Render(hint)
+		if lipgloss.Width(next) > width {
+			break
+		}
+		line = next
+	}
+	return ansi.Truncate(line, width, "…")
 }

@@ -257,19 +257,19 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return m.cycleMode()
 	case "ctrl+home":
 		m.viewport.GotoTop()
+		m.detachFollow()
 		if m.focusedTranscript {
 			m.selected, m.browseLine, m.dirty = 0, 0, true
 		}
 		return nil
 	case "ctrl+end":
-		m.viewport.GotoBottom()
+		m.attachFollow()
 		if m.focusedTranscript {
 			if c := m.state.Active(); c != nil {
 				m.selected = max(0, len(c.Entries)-1)
 			}
 			m.browseLine, m.dirty = max(0, len(strings.Split(m.viewport.GetContent(), "\n"))-1), true
 		}
-		m.unseen = false
 		return nil
 	case "pgup", "pgdown":
 		delta := m.viewport.Height()
@@ -530,6 +530,9 @@ func (m *Model) moveSelection(delta int) {
 		return
 	}
 	m.selected = min(max(0, m.selected+delta), max(0, len(c.Entries)-1))
+	if delta < 0 {
+		m.detachFollow()
+	}
 	m.refresh()
 	if m.selected < len(m.positions) {
 		line := m.positions[m.selected]
@@ -539,7 +542,9 @@ func (m *Model) moveSelection(delta int) {
 		m.browseLine = min(max(line, m.viewport.YOffset()), m.viewport.YOffset()+m.viewport.Height()-1)
 	}
 	if m.viewport.AtBottom() {
-		m.unseen = false
+		m.attachFollow()
+	} else {
+		m.detachFollow()
 	}
 }
 
@@ -577,6 +582,11 @@ func (m *Model) expandSelected() tea.Cmd {
 	if m.selected < len(m.positions) {
 		m.viewport.SetYOffset(m.positions[m.selected] - screenRow)
 		m.browseLine = m.positions[m.selected]
+	}
+	if m.viewport.AtBottom() {
+		m.attachFollow()
+	} else {
+		m.detachFollow()
 	}
 	return nil
 }

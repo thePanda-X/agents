@@ -14,12 +14,42 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// attachFollow pins the transcript to the live end: refresh before the next
+// render keeps the bottom of the newest content visible. detachFollow freezes
+// the reading position until an explicit return to the bottom.
+func (m *Model) attachFollow() {
+	if m.textSelection != nil {
+		return
+	}
+	m.following = true
+	m.unseen = false
+	m.viewport.GotoBottom()
+}
+
+// detachFollow preserves the reader's position when content is added. The
+// viewport offset itself is untouched; only the live-end policy changes.
+func (m *Model) detachFollow() {
+	m.following = false
+}
+
+// noteScroll reconciles the follow state after wheel input. Scrolling down to
+// the bottom reattaches; scrolling away detaches. A maximally scrolled
+// viewport never reports AtBottom after a refresh without reattaching, so the
+// updated offset is also checked.
+func (m *Model) noteScroll(before int, down bool) {
+	if down && m.viewport.AtBottom() {
+		m.attachFollow()
+	} else if !down && before > 0 && !m.viewport.AtBottom() {
+		m.detachFollow()
+	}
+}
+
 func (m *Model) setTranscriptFocus(focused bool) tea.Cmd {
 	changed := m.focusedTranscript != focused
 	if changed {
 		m.clearTextSelection()
 	}
-	follow, anchor, offset := m.viewport.AtBottom(), 0, 0
+	follow, anchor, offset := m.following, 0, 0
 	if changed && m.opts.Settings.Compact {
 		previous := -1
 		for index, position := range m.positions {
@@ -94,6 +124,11 @@ func (m *Model) scrollTranscriptLines(delta int) {
 		m.browseLine = min(max(0, m.browseLine+delta), max(0, total-1))
 	}
 	m.viewport.SetYOffset(m.viewport.YOffset() + delta)
+	if delta < 0 && !m.viewport.AtBottom() {
+		m.detachFollow()
+	} else if delta > 0 && m.viewport.AtBottom() {
+		m.attachFollow()
+	}
 	if m.focusedTranscript && len(m.positions) > 0 {
 		selected := 0
 		for index, position := range m.positions {
@@ -133,6 +168,7 @@ func (m *Model) browseKey(key string) (tea.Cmd, bool) {
 		if prefix == "g" && time.Since(m.browsePrefixAt) < time.Second {
 			m.selectEntry(0)
 			m.viewport.GotoTop()
+			m.detachFollow()
 			m.browseLine = 0
 		} else {
 			m.browsePrefix, m.browsePrefixAt = "g", time.Now()
@@ -140,9 +176,8 @@ func (m *Model) browseKey(key string) (tea.Cmd, bool) {
 	case "G":
 		if c := m.state.Active(); c != nil {
 			m.selectEntry(len(c.Entries) - 1)
-			m.viewport.GotoBottom()
+			m.attachFollow()
 			m.browseLine = max(0, len(strings.Split(m.viewport.GetContent(), "\n"))-1)
-			m.unseen = false
 		}
 	case "J":
 		m.jumpEntry(1, "turn")
@@ -303,12 +338,20 @@ func (m *Model) revealSearchOccurrence(index, occurrence int) {
 		m.searchOccurrence = min(occurrence, len(hits)-1)
 		m.refresh()
 		line := hits[m.searchOccurrence]
+		m.detachFollow()
 		m.viewport.SetYOffset(max(start, line-1))
+		if m.viewport.AtBottom() {
+			m.attachFollow()
+		}
 		m.browseLine = line
 		m.state.Notice = fmt.Sprintf("Search %q · match %d/%d in entry %d · n/N next/previous", m.searchQuery, m.searchOccurrence+1, len(hits), index+1)
 		return
 	}
+	m.detachFollow()
 	m.viewport.SetYOffset(start)
+	if m.viewport.AtBottom() {
+		m.attachFollow()
+	}
 	m.browseLine = start
 }
 

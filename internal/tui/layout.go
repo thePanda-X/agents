@@ -7,7 +7,7 @@ func (m *Model) toggleCompact() tea.Cmd {
 	if m.dirty {
 		m.refresh()
 	}
-	follow := m.viewport.AtBottom()
+	follow := m.following
 	anchor, offset := 0, 0
 	previous := -1
 	for index, position := range m.positions {

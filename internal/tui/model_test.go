@@ -49,11 +49,32 @@ func TestTranscriptRetainsScrollPositionDuringStreaming(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.state.Apply(harness.Event{Kind: harness.Message, Generation: 1, SessionID: "s", Chunk: harness.MessageChunk{ID: "reply", Role: "assistant", Text: strings.Repeat("A line of response.\n\n", 100)}})
 	m.refresh()
-	m.viewport.SetYOffset(10)
+	if !m.viewport.AtBottom() {
+		t.Fatal("fresh session should start attached at the bottom")
+	}
+	// Scrolling up detaches from the live end.
+	m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	offset := m.viewport.YOffset()
+	if m.following || offset == 0 {
+		t.Fatalf("wheel up did not detach: following=%v offset=%d", m.following, offset)
+	}
 	m.state.Apply(harness.Event{Kind: harness.Message, Generation: 1, SessionID: "s", Chunk: harness.MessageChunk{ID: "reply", Role: "assistant", Text: "more"}})
 	m.refresh()
-	if m.viewport.YOffset() != 10 {
-		t.Fatal("streaming moved the reader's scroll position")
+	if m.viewport.YOffset() != offset {
+		t.Fatalf("streaming moved the detached reader: got %d want %d", m.viewport.YOffset(), offset)
+	}
+	// Returning to the bottom reattaches and follows new content.
+	for i := 0; i < 50 && !m.viewport.AtBottom(); i++ {
+		m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	}
+	if !m.viewport.AtBottom() || !m.following {
+		t.Fatalf("returning to the bottom did not reattach: following=%v atbottom=%v", m.following, m.viewport.AtBottom())
+	}
+	before := m.viewport.YOffset()
+	m.state.Apply(harness.Event{Kind: harness.Message, Generation: 1, SessionID: "s", Chunk: harness.MessageChunk{ID: "reply", Role: "assistant", Text: "tail"}})
+	m.refresh()
+	if m.viewport.YOffset() != before || !m.viewport.AtBottom() {
+		t.Fatalf("reattached reader did not follow streaming: got %d want %d", m.viewport.YOffset(), before)
 	}
 }
 

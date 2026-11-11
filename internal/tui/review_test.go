@@ -230,7 +230,7 @@ func TestOperationalStatusAndTransientFeedbackAreIndependent(t *testing.T) {
 	m := testModel(t)
 	m.state.Active().Busy, m.state.Active().StartedAt = true, time.Now()
 	m.state.LastError = errors.New("local attachment failed")
-	if !strings.Contains(ansi.Strip(m.activity(40)), "Working") || !strings.Contains(ansi.Strip(m.activity(40)), "stop") || !strings.Contains(ansi.Strip(m.feedback(80)), "attachment failed") {
+	if !strings.Contains(ansi.Strip(m.activity(40)), "Responding") || !strings.Contains(ansi.Strip(m.activity(40)), "stop") || !strings.Contains(ansi.Strip(m.feedback(80)), "attachment failed") {
 		t.Fatal("local error hid running state or cancellation guidance")
 	}
 	m.state.Active().Busy = false

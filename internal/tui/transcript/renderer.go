@@ -168,7 +168,11 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 			}
 			block = r.tool(entry.Tool, options.Expanded[entry.ID], options.Terminals, width-2, frame)
 		} else if entry.Role == "thought" {
-			block = theme.Quiet.Render("◇ Thinking")
+			label := "◇ Thinking"
+			if duration, ok := thoughtDuration(c.Entries, index); ok {
+				label = "◇ Thought · " + formatThoughtDuration(duration)
+			}
+			block = theme.Quiet.Render(label)
 			expanded, overridden := options.Expanded[entry.ID+fmt.Sprint(index)]
 			if !overridden {
 				expanded = options.Thoughts
@@ -288,6 +292,44 @@ func renderUser(entry *app.Entry, width int, compact, expanded bool) string {
 		Border(lipgloss.Border{Left: "│"}, false, false, false, true).
 		BorderForeground(theme.Pink).
 		Padding(padding, 1).Width(width - 2).Render(block)
+}
+
+// thoughtDuration reports how long a reasoning block took, using the next
+// timestamped entry as its end. Replayed sessions and turns that end without a
+// following entry have no reliable duration, so the label stays "Thinking".
+func thoughtDuration(entries []*app.Entry, index int) (time.Duration, bool) {
+	start := entries[index].At
+	if start.IsZero() {
+		return 0, false
+	}
+	for _, next := range entries[index+1:] {
+		if next.Role == "user" {
+			return 0, false
+		}
+		if next.At.IsZero() || !next.At.After(start) {
+			continue
+		}
+		return next.At.Sub(start), true
+	}
+	return 0, false
+}
+
+func formatThoughtDuration(duration time.Duration) string {
+	if duration < 10*time.Second {
+		return fmt.Sprintf("%.1fs", duration.Seconds())
+	}
+	seconds := max(int64(0), int64(duration/time.Second))
+	var parts []string
+	if hours := seconds / 3600; hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if minutes := seconds / 60 % 60; minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	if remainder := seconds % 60; remainder > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%ds", remainder))
+	}
+	return strings.Join(parts, " ")
 }
 
 func highlightSearch(block string, search *regexp.Regexp) string {

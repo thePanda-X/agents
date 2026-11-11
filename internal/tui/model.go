@@ -95,38 +95,42 @@ type Model struct {
 	historyIndex                                           int
 	draftBeforeHistory                                     string
 	dirty, unseen, submitting, sessionPending, demoStarted bool
-	lastSavedDraft                                         string
-	lastSave                                               time.Time
-	savePending                                            uint64
-	saveFailures                                           int
-	saveRetry                                              bool
-	saveRetryAt                                            time.Time
-	saveError                                              error
-	quitAt                                                 time.Time
-	saveRevision                                           uint64
-	urlReviewed, urlOpening                                bool
-	searchQuery                                            string
-	searchEntry, searchOccurrence, searchOccurrences       int
-	browsePrefix                                           string
-	browsePrefixAt                                         time.Time
-	clearedDraft                                           string
-	infoHunks                                              []int
-	infoPaths                                              []string
-	infoContent                                            string
-	recentActions                                          []string
-	filePickerGeneration                                   uint64
-	filePreviewPath                                        string
-	skillsGeneration                                       uint64
-	displayedSessionID                                     string
-	commandAgentOnly                                       bool
-	drafts                                                 map[draftKey]*draftBuffer
-	hasWorked                                              bool
-	overlayStack                                           []overlayFrame
-	noticeText, errorText                                  string
-	noticeAt, errorAt                                      time.Time
-	branchWorkspace, branch                                string
-	branchPending                                          bool
-	branchChecked                                          time.Time
+	// following keeps the transcript pinned to the live end until the reader
+	// scrolls away. It reattaches only on an explicit return to the bottom, so
+	// incidental content changes cannot yank a detached reader.
+	following                                        bool
+	lastSavedDraft                                   string
+	lastSave                                         time.Time
+	savePending                                      uint64
+	saveFailures                                     int
+	saveRetry                                        bool
+	saveRetryAt                                      time.Time
+	saveError                                        error
+	quitAt                                           time.Time
+	saveRevision                                     uint64
+	urlReviewed, urlOpening                          bool
+	searchQuery                                      string
+	searchEntry, searchOccurrence, searchOccurrences int
+	browsePrefix                                     string
+	browsePrefixAt                                   time.Time
+	clearedDraft                                     string
+	infoHunks                                        []int
+	infoPaths                                        []string
+	infoContent                                      string
+	recentActions                                    []string
+	filePickerGeneration                             uint64
+	filePreviewPath                                  string
+	skillsGeneration                                 uint64
+	displayedSessionID                               string
+	commandAgentOnly                                 bool
+	drafts                                           map[draftKey]*draftBuffer
+	hasWorked                                        bool
+	overlayStack                                     []overlayFrame
+	noticeText, errorText                            string
+	noticeAt, errorAt                                time.Time
+	branchWorkspace, branch                          string
+	branchPending                                    bool
+	branchChecked                                    time.Time
 }
 
 func New(options Options) *Model {
@@ -150,7 +154,7 @@ func New(options Options) *Model {
 	style.Focused.CursorLine, style.Blurred.CursorLine = theme.Body, theme.Body
 	style.Cursor.Color = theme.Pink
 	input.SetStyles(style)
-	m := &Model{opts: options, state: app.NewState(), input: input, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)), info: viewport.New(), renderer: transcript.New(), expanded: make(map[string]bool), width: 84, height: 30, dirty: true}
+	m := &Model{opts: options, state: app.NewState(), input: input, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)), info: viewport.New(), renderer: transcript.New(), expanded: make(map[string]bool), width: 84, height: 30, dirty: true, following: true}
 	m.saveRevision = options.Snapshot.Revision
 	workspace := options.Snapshot.Workspaces[storage.Key(options.Agent.Workspace, options.Descriptor.ID)]
 	m.hasWorked = workspace.Session.ID != ""
@@ -210,7 +214,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.state.Apply(e) {
 			m.dirty = true
-			if !m.viewport.AtBottom() && (e.Kind == harness.Message || e.Kind == harness.Tool || e.Kind == harness.TerminalOutput) {
+			if (!m.following || m.textSelection != nil) && (e.Kind == harness.Message || e.Kind == harness.Tool || e.Kind == harness.TerminalOutput) {
 				m.unseen = true
 			}
 			switch e.Kind {
@@ -270,7 +274,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = 0
 					m.browseVisited = false
 					m.searchQuery, m.browsePrefix = "", ""
-					m.viewport.GotoBottom()
+					m.attachFollow()
 					if !creating {
 						m.restoreDraft()
 					}
@@ -466,14 +470,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.info, cmd = m.info.Update(msg)
 			cmds = append(cmds, cmd)
 		} else if m.list == nil && m.interaction == nil {
+			before := m.viewport.YOffset()
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
+			if m.textSelection == nil {
+				m.noteScroll(before, msg.Button == tea.MouseWheelDown)
+			}
 			if m.textSelection != nil && m.textSelection.dragging {
 				m.extendTextSelection(msg.Mouse())
-			}
-			if m.viewport.AtBottom() {
-				m.unseen = false
 			}
 		}
 	default:
@@ -505,7 +510,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) resize() {
 	width := max(8, m.width-4)
-	chrome := 8
+	chrome := 7
 	if m.opts.Settings.Compact {
 		chrome = 6
 	}
@@ -554,13 +559,13 @@ func boolInt(v bool) int {
 }
 
 func (m *Model) refresh() {
-	follow := m.viewport.AtBottom() && m.textSelection == nil
+	follow := m.following && m.textSelection == nil
 	text, positions := m.renderer.Render(m.state.Active(), transcript.Options{Width: m.viewport.Width(), Selected: m.selected, Focused: m.focusedTranscript, Thoughts: m.opts.Settings.ShowThoughts, Compact: m.opts.Settings.Compact, Search: m.searchQuery, SearchOccurrence: m.searchOccurrence, Expanded: m.expanded, Terminals: m.state.TerminalOutputs, SpinnerFrame: m.toolSpinnerFrame, ReducedMotion: m.opts.Settings.ReducedMotion})
 	m.positions = positions
 	m.validateTextSelection(text)
 	m.transcriptContent = text
 	m.setTranscriptContent()
-	if follow && !m.focusedTranscript {
+	if follow {
 		m.viewport.GotoBottom()
 		m.unseen = false
 	}
@@ -635,6 +640,6 @@ func (m *Model) submitPrompt(prompt harness.Prompt, draft string) tea.Cmd {
 	m.stashDraft()
 	m.focusedTranscript = false
 	m.input.Focus()
-	m.viewport.GotoBottom()
+	m.attachFollow()
 	return command(func() { controller.Prompt(id, prompt) })
 }

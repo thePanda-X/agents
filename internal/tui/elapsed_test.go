@@ -37,7 +37,7 @@ func TestWorkingActivityUsesHourMinuteSecondElapsedTime(t *testing.T) {
 	c := m.state.Active()
 	c.Busy = true
 	c.StartedAt = time.Now().Add(-time.Hour - 2*time.Minute - 41*time.Second)
-	if got := ansi.Strip(m.activity(100)); !strings.Contains(got, "Working · 1h 2m 41s") {
+	if got := ansi.Strip(m.activity(100)); !strings.Contains(got, "Responding… 1h 2m 41s") {
 		t.Fatalf("activity did not use formatted elapsed time: %q", got)
 	}
 }

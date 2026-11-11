@@ -48,6 +48,7 @@ func TestCompactShortcutPreservesDraftFocusAndReadingAnchor(t *testing.T) {
 	m.refresh()
 	m.setTranscriptFocus(true)
 	m.selectEntry(1)
+	m.detachFollow()
 	m.viewport.SetYOffset(m.positions[1] + 5)
 	m.browseLine = m.positions[1] + 6
 	for _, want := range []bool{true, false} {
@@ -302,7 +303,10 @@ func TestVimFocusKeepsCursorSelectionAndScroll(t *testing.T) {
 	m.input.SetValue("draft text")
 	m.input.SetCursorColumn(3)
 	m.refresh()
-	m.viewport.SetYOffset(10)
+	if !m.viewport.AtBottom() {
+		t.Fatal("fixture did not start at the bottom")
+	}
+	m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
 	m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !m.focusedTranscript || m.input.Focused() {
 		t.Fatal("Esc did not enter browse")

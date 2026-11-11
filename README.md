@@ -238,14 +238,21 @@ wrapped Markdown links; dragging over a link selects text instead of opening it.
 Only HTTP/HTTPS URLs without embedded credentials are opened. The browser opens
 on the machine running Agents (not automatically on your laptop over SSH).
 
-Scrolling away from the bottom disables automatic
-following until you return. Plans, reported changes, settings, authentication,
-and harness selection are available through the command palette.
+The transcript stays pinned to the live end while you are at the bottom.
+Scrolling up (keyboard or mouse) detaches you: new output no longer moves the
+reading position, and the `↓ new` indicator appears until you return. Going
+back to the bottom reattaches — wheel down, `G`, `Ctrl+End`, or sending a new
+prompt all re-pin the view, and streaming resumes following. Plans, reported
+changes, settings, authentication, and harness selection are available through
+the command palette.
 
 Dialogs are centered over the conversation. Short or narrow terminals use tighter
 padding and reserve space for the selected action and close/cancel instructions.
 The statusline keeps connection and turn state visible; short-lived notifications
-appear separately above it. `/diagnostics` opens full error details and agent setup
+appear separately above it. A running turn reads `Responding… 12s` with the stop
+shortcut on the right. The composer's bottom border labels the advertised model,
+effort, and mode, and the footer lists `Key:action` shortcuts separated by `│`.
+`/diagnostics` opens full error details and agent setup
 instructions. Failed file, skill, and session pickers offer Enter to retry.
 
 The composer grows for both soft-wrapped text and explicit newlines, up to four
@@ -293,9 +300,8 @@ filter and selection. The command palette groups related actions and explains
 unavailable actions instead of silently ignoring them.
 
 Enable **Compact layout** in `/settings` (or `"compact": true`) to reduce message
-padding and combine configuration with the statusline. COMPOSE/BROWSE/SEARCH
-labels make focus explicit. Shortcut hints in the palette, footer, and help use
-the configured keybindings. Ctrl+R now searches history; remap `history` or
+padding. COMPOSE/BROWSE/SEARCH labels make focus explicit. Shortcut hints in the palette,
+footer, and help use the configured keybindings. Ctrl+R now searches history; remap `history` or
 `reconnect` to restore your preferred arrangement.
 Ctrl+T cycles the active session's advertised thinking/effort choices in order,
 wrapping to the first choice. Before a session exists, it prepares an empty
@@ -437,7 +443,10 @@ restores each entry individually; explicitly expanded entries remain visible in
 either mode. Group labels show both tool and thinking-block counts.
 Pending and running tools show an animated spinner in place of the fold arrow,
 including when expanded. Finished tools return to their expand/collapse arrows.
-Thinking blocks display only reasoning text actually supplied by the harness.
+Thinking blocks display only reasoning text actually supplied by the harness. When
+the next entry's timestamp is available, the collapsed label shows how long
+reasoning took, such as `◇ Thought · 2.0s`; replayed sessions keep the
+timestamp-free `◇ Thinking` label.
 Empty chunks are labelled "no text supplied by agent" rather than expanding to
 blank content; the client cannot recover reasoning a provider does not expose.
 

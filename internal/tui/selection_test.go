@@ -78,7 +78,7 @@ func TestMouseTextSelectionAndCopyInResponsiveLayouts(t *testing.T) {
 					if got := m.textSelection.Text(m.transcriptContent); got != "highlighted" {
 						t.Fatalf("selected %q", got)
 					}
-					if !strings.Contains(ansi.Strip(m.footer(m.viewport.Width())), "y copy") && !strings.Contains(ansi.Strip(m.footer(m.viewport.Width())), "right-click copy") {
+					if !strings.Contains(ansi.Strip(m.footer(m.viewport.Width())), "y:copy") {
 						t.Fatal("selection copy hint missing")
 					}
 					_, cmd := m.Update(letter('y'))
@@ -262,6 +262,7 @@ func TestMouseWheelExtendsSelectionAcrossPages(t *testing.T) {
 	m.state.Active().Entries = []*app.Entry{{Role: "assistant", Text: "First selected row.\n\n" + strings.Repeat("More response rows.\n\n", 40)}}
 	m.refresh()
 	m.viewport.GotoTop()
+	m.detachFollow()
 	mouse := responseTextMouse(t, m, "First")
 	m.Update(tea.MouseClickMsg(mouse))
 	for range 10 {
