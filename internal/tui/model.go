@@ -5,6 +5,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -131,6 +132,11 @@ type Model struct {
 	branchWorkspace, branch                          string
 	branchPending                                    bool
 	branchChecked                                    time.Time
+	// sessionNames holds client-side display-name overrides for sessions,
+	// keyed by storage.SessionKey. They are presentation-only and never sent
+	// to the harness. renamingSessionID tracks an open rename form.
+	sessionNames      map[string]string
+	renamingSessionID string
 }
 
 func New(options Options) *Model {
@@ -155,6 +161,10 @@ func New(options Options) *Model {
 	style.Cursor.Color = theme.Pink
 	input.SetStyles(style)
 	m := &Model{opts: options, state: app.NewState(), input: input, viewport: viewport.New(viewport.WithWidth(80), viewport.WithHeight(20)), info: viewport.New(), renderer: transcript.New(), expanded: make(map[string]bool), width: 84, height: 30, dirty: true, following: true}
+	m.sessionNames = maps.Clone(options.Snapshot.SessionNames)
+	if m.sessionNames == nil {
+		m.sessionNames = make(map[string]string)
+	}
 	m.saveRevision = options.Snapshot.Revision
 	workspace := options.Snapshot.Workspaces[storage.Key(options.Agent.Workspace, options.Descriptor.ID)]
 	m.hasWorked = workspace.Session.ID != ""
@@ -337,6 +347,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case harness.SessionDeleted:
 				m.forgetSession(e.SessionID)
+				if m.renamingSessionID == e.SessionID && m.overlay == "rename" {
+					m.closeRename()
+				}
 				for key, buffer := range m.drafts {
 					if key.Harness == m.opts.Descriptor.ID && key.Session == e.SessionID {
 						buffer.Generation++
@@ -421,7 +434,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardTextMsg:
 		m.receiveClipboardText(msg)
 	case tea.PasteMsg:
-		if m.interaction != nil && m.form != nil {
+		if m.form != nil {
 			cmds = append(cmds, m.form.Update(msg))
 		} else if m.list != nil {
 			cmds = append(cmds, m.list.Update(msg))
@@ -489,7 +502,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	default:
-		if m.interaction != nil && m.form != nil {
+		if m.form != nil {
 			cmds = append(cmds, m.form.Update(msg))
 		} else if m.list != nil {
 			cmds = append(cmds, m.list.Update(msg))

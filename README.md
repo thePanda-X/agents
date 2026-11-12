@@ -74,6 +74,11 @@ date**. Agent-reported dates are preserved in local session references, without
 substituting the client's resume time for last activity. ACP replay does not
 supply per-message timestamps, so historical prompts omit their time rather than
 show the time you resumed them.
+Press **Ctrl+R** in the picker to rename the selected session. The name is a
+client-side display override shown in the picker, header, and window title in
+place of the agent's title. It is stored with your client state, never sent to
+the agent or used to rename the native session, and leaving the name empty
+restores the agent's automatic title.
 Loading a saved session does not depend on metadata listing being available:
 if listing fails temporarily, a known workspace reference can still be loaded.
 Authentication failures and failures discovering an unknown workspace remain
@@ -480,7 +485,7 @@ You can also type or paste a complete command and run it directly.
 | Command | Action |
 | --- | --- |
 | `/help`, `/commands` | Show help or browse all slash commands |
-| `/new`, `/sessions` | Create a conversation or browse session history |
+| `/new`, `/sessions` | Create a conversation or browse session history (press `Ctrl+R` in the picker to rename a session locally) |
 | `/model [value]`, `/effort [value]`, `/mode [value]` | Open the relevant selector, or set an advertised value ID/name |
 | `/options`, `/harness`, `/settings`, `/auth` | Open the corresponding controls |
 | `/plan`, `/changes` | Inspect the reported plan or diffs |

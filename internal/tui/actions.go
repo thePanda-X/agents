@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"agents/internal/app"
 	"agents/internal/harness"
+	"agents/internal/storage"
 	"agents/internal/tui/overlays"
 	"agents/internal/tui/theme"
 	"agents/internal/tui/transcript"
@@ -26,6 +28,8 @@ type overlayFrame struct {
 
 func (m *Model) closeOverlay() {
 	m.list, m.overlay, m.infoTitle = nil, "", ""
+	m.form = nil
+	m.renamingSessionID = ""
 	m.infoPaths, m.infoHunks, m.infoContent = nil, nil, ""
 	m.browsePrefix = ""
 	m.overlayStack = nil
@@ -96,6 +100,31 @@ func (m *Model) openSessions() tea.Cmd {
 	return command(controller.ListSessions)
 }
 
+// sessionLabel resolves the displayed name for a session: a client-side rename
+// wins, then the agent-reported title, then the session ID.
+func (m *Model) sessionLabel(id, title string) string {
+	if name := m.sessionNames[storage.SessionKey(id, m.opts.Descriptor.ID)]; name != "" {
+		return name
+	}
+	if title != "" {
+		return title
+	}
+	return id
+}
+
+// activeSessionLabel is sessionLabel without the ID fallback: the header and
+// window title stay quiet when there is neither a nickname nor an agent title.
+func (m *Model) activeSessionLabel() string {
+	c := m.state.Active()
+	if c == nil {
+		return ""
+	}
+	if name := m.sessionNames[storage.SessionKey(c.Info.ID, m.opts.Descriptor.ID)]; name != "" {
+		return name
+	}
+	return c.Info.Title
+}
+
 func (m *Model) populateSessions() {
 	if m.list == nil {
 		return
@@ -108,11 +137,11 @@ func (m *Model) populateSessions() {
 	m.list.Items = nil
 	m.list.Loading = false
 	m.list.Error = ""
-	m.list.Description = "Enter loads history."
+	m.list.Description = "Enter loads history · Ctrl+R renames locally."
 	if m.state.Peer.Capabilities.Delete {
 		m.list.Description += " Ctrl+X deletes after confirmation."
 	}
-	m.list.Hint = "Enter load · Esc close"
+	m.list.Hint = "Enter load · Ctrl+R rename · Esc close"
 	m.list.GroupHeaders = true
 	sessions := append([]harness.SessionInfo(nil), m.state.Sessions...)
 	// A session's picker date is its last local open or prompt, falling back to
@@ -142,10 +171,7 @@ func (m *Model) populateSessions() {
 		return at[b.ID].Compare(at[a.ID])
 	})
 	for _, info := range sessions {
-		label := info.Title
-		if label == "" {
-			label = info.ID
-		}
+		label := m.sessionLabel(info.ID, info.Title)
 		current := info.ID == m.state.ActiveID
 		detail := ""
 		group := "Unknown date"
@@ -190,6 +216,51 @@ func (m *Model) confirmDelete(item overlays.Item) {
 	m.overlayStack = append(history, parent)
 	m.list.Searchable = false
 	m.list.Description = item.Label + " · This cannot be undone."
+}
+
+// renameSessionSchema is a minimal validated form for a single client-side
+// session name. The rename form reuses the agent-form components.
+const renameSessionSchema = `{"type":"object","properties":{"name":{"type":"string","title":"Session name","maxLength":200}}}`
+
+func (m *Model) renameSession(item overlays.Item) {
+	info := item.Value.(harness.SessionInfo)
+	form, err := overlays.NewForm(json.RawMessage(renameSessionSchema))
+	if err != nil {
+		m.state.LastError = err
+		return
+	}
+	form.Message = "Client-side name shown instead of the agent's title. Leave empty to restore the automatic title."
+	form.Questions[0].Field.Input.SetValue(m.sessionLabel(info.ID, info.Title))
+	form.Questions[0].Field.Input.CharLimit = 200
+	m.renamingSessionID = info.ID
+	m.form = form
+	m.input.Blur()
+	m.overlay = "rename"
+	m.dirty = true
+}
+
+func (m *Model) applyRename() tea.Cmd {
+	key := storage.SessionKey(m.renamingSessionID, m.opts.Descriptor.ID)
+	name := ""
+	if content, ok := m.form.Content["name"].(string); ok {
+		name = strings.TrimSpace(content)
+	}
+	if name == "" {
+		delete(m.sessionNames, key)
+	} else {
+		m.sessionNames[key] = name
+	}
+	m.closeRename()
+	m.dirty = true
+	return m.save()
+}
+
+func (m *Model) closeRename() {
+	m.form = nil
+	m.renamingSessionID = ""
+	m.overlay = "sessions"
+	m.populateSessions()
+	m.dirty = true
 }
 
 func (m *Model) openOptions() tea.Cmd {

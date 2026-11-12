@@ -79,7 +79,7 @@ func (m *Model) windowTitle() string {
 		parts = append(parts, status)
 	}
 	if c != nil {
-		if title := strings.Join(strings.Fields(theme.Clean(c.Info.Title)), " "); title != "" {
+		if title := strings.Join(strings.Fields(theme.Clean(m.activeSessionLabel())), " "); title != "" {
 			parts = append(parts, title)
 		}
 	}
@@ -100,8 +100,8 @@ func (m *Model) header(width int) string {
 		workspace += ":" + branch
 	}
 	left := theme.Quiet.Render(theme.Clean(workspace))
-	if c := m.state.Active(); c != nil && c.Info.Title != "" {
-		left += theme.Quiet.Render(" · " + theme.Clean(c.Info.Title))
+	if label := m.activeSessionLabel(); label != "" {
+		left += theme.Quiet.Render(" · " + theme.Clean(label))
 	}
 	right := theme.Accent.Render(m.opts.Descriptor.Name)
 	if c := m.state.Active(); c != nil && c.Usage != nil {

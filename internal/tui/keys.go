@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"agents/internal/harness"
+	"agents/internal/tui/overlays"
 	"agents/internal/tui/transcript"
 
 	bubbleskey "charm.land/bubbles/v2/key"
@@ -108,6 +109,10 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			m.answer(m.interaction, harness.Decision{Action: "cancel"})
 			return nil
 		}
+		if m.overlay == "rename" && m.form != nil {
+			m.closeRename()
+			return nil
+		}
 		if m.list != nil || m.overlay != "" {
 			if m.overlay == "commands" {
 				m.dismissCommandPicker()
@@ -136,6 +141,17 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.interaction != nil {
 		return m.interactionKey(key)
+	}
+	if m.overlay == "rename" && m.form != nil {
+		action, cmd := m.form.Key(key)
+		switch action {
+		case overlays.ActionSubmit:
+			return m.applyRename()
+		case overlays.ActionSkip:
+			m.closeRename()
+			return nil
+		}
+		return cmd
 	}
 	if m.list != nil {
 		switch pressed {
@@ -185,6 +201,13 @@ func (m *Model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			if m.overlay == "sessions" && m.state.Peer.Capabilities.Delete {
 				if item, ok := m.list.Selected(); ok {
 					m.confirmDelete(item)
+					return nil
+				}
+			}
+		case "ctrl+r":
+			if m.overlay == "sessions" {
+				if item, ok := m.list.Selected(); ok {
+					m.renameSession(item)
 					return nil
 				}
 			}

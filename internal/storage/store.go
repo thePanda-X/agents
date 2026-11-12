@@ -43,6 +43,9 @@ type Snapshot struct {
 	Version    int                       `json:"version"`
 	Revision   uint64                    `json:"revision"`
 	Workspaces map[string]WorkspaceState `json:"workspaces"`
+	// SessionNames holds client-side display names for sessions. Names are
+	// local presentation overrides keyed by harness, never native ACP metadata.
+	SessionNames map[string]string `json:"session_names,omitempty"`
 }
 
 type Store struct {
@@ -90,6 +93,9 @@ func (s *Store) load() (Settings, Snapshot, error) {
 	}
 	if snapshot.Workspaces == nil {
 		snapshot.Workspaces = make(map[string]WorkspaceState)
+	}
+	if snapshot.SessionNames == nil {
+		snapshot.SessionNames = make(map[string]string)
 	}
 	return settings, snapshot, nil
 }
@@ -176,3 +182,7 @@ func (s *Store) write(name string, value any) error {
 }
 
 func Key(workspace, harnessID string) string { return harnessID + ":" + workspace }
+
+// SessionKey scopes a client-side session display name to one harness. The
+// picker lists sessions across workspaces, so names are not per-workspace.
+func SessionKey(sessionID, harnessID string) string { return harnessID + ":" + sessionID }

@@ -59,6 +59,7 @@ func mergeSnapshot(current, before, after Snapshot) Snapshot {
 			delete(current.Workspaces, key)
 		}
 	}
+	current.SessionNames = mergeMap(current.SessionNames, before.SessionNames, after.SessionNames)
 	current.Revision = max(current.Revision, after.Revision)
 	return current
 }
@@ -81,5 +82,6 @@ func cloneSnapshot(snapshot Snapshot) Snapshot {
 		workspace.Drafts = maps.Clone(workspace.Drafts)
 		snapshot.Workspaces[key] = workspace
 	}
+	snapshot.SessionNames = maps.Clone(snapshot.SessionNames)
 	return snapshot
 }

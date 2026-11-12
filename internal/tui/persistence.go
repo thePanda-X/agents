@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"maps"
 	"time"
 
 	"agents/internal/harness"
@@ -84,6 +85,7 @@ func (m *Model) Snapshot() (storage.Settings, storage.Snapshot) {
 			workspace.Drafts = drafts
 			snapshot.Workspaces[key] = workspace
 		}
+		snapshot.SessionNames = maps.Clone(m.sessionNames)
 	}
 	return m.opts.Settings, snapshot
 }
@@ -137,6 +139,7 @@ func (m *Model) receiveSave(msg saveMsg) {
 }
 
 func (m *Model) forgetSession(id string) {
+	delete(m.sessionNames, storage.SessionKey(id, m.opts.Descriptor.ID))
 	for key, workspace := range m.opts.Snapshot.Workspaces {
 		drafts := make(map[string]string)
 		for draftID, draft := range workspace.Drafts {
