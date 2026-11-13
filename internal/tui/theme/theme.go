@@ -59,6 +59,46 @@ func TerminalDefault(content string) string {
 	})
 }
 
+// FillBackground re-applies the application background after every SGR
+// sequence that resets the background (full resets and code 49). Nested styles
+// end with resets that otherwise fall back to the terminal's default background.
+// Terminals that honor OSC 11 hide this, but Windows consoles commonly ignore
+// it, leaving unpainted gaps beside text.
+func FillBackground(content string) string {
+	r, g, b, _ := Background.RGBA()
+	fill := "48;2;" + strconv.Itoa(int(r>>8)) + ";" + strconv.Itoa(int(g>>8)) + ";" + strconv.Itoa(int(b>>8))
+	return sgr.ReplaceAllStringFunc(content, func(sequence string) string {
+		parameters := strings.Split(sequence[2:len(sequence)-1], ";")
+		reset := false
+		for index := 0; index < len(parameters); index++ {
+			code, _ := strconv.Atoi(parameters[index]) // empty parameter means 0
+			switch {
+			case code == 0 || code == 49:
+				reset = true
+			case code == 48:
+				reset = false
+				fallthrough
+			case code == 38 || code == 58:
+				if index+1 < len(parameters) {
+					mode := parameters[index+1]
+					index++
+					if mode == "2" {
+						index += 3
+					} else if mode == "5" {
+						index++
+					}
+				}
+			case code >= 40 && code <= 47 || code >= 100 && code <= 107:
+				reset = false
+			}
+		}
+		if !reset {
+			return sequence
+		}
+		return sequence[:len(sequence)-1] + ";" + fill + "m"
+	})
+}
+
 var (
 	Background = lipgloss.Color("#1B1B1F")
 	Surface    = lipgloss.Color("#27272D")

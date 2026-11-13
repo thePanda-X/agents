@@ -50,3 +50,22 @@ func TestTerminalTextSelectionRemainsVisibleWithoutApplicationColors(t *testing.
 		t.Fatalf("terminal selection lost reverse video or retained application colors: %q", result)
 	}
 }
+
+func TestFillBackgroundReappliesAppBackgroundAfterResets(t *testing.T) {
+	const fill = "48;2;27;27;31"
+	for input, want := range map[string]string{
+		"\x1b[m":                     "\x1b[;" + fill + "m",
+		"\x1b[0m":                    "\x1b[0;" + fill + "m",
+		"\x1b[1;49m":                 "\x1b[1;49;" + fill + "m",
+		"\x1b[0;48;2;1;2;3m":         "\x1b[0;48;2;1;2;3m",
+		"\x1b[0;44m":                 "\x1b[0;44m",
+		"\x1b[38;2;0;0;0m":           "\x1b[38;2;0;0;0m",
+		"\x1b[38;5;0m":               "\x1b[38;5;0m",
+		"\x1b[48;2;1;2;3;0m":         "\x1b[48;2;1;2;3;0;" + fill + "m",
+		"plain text without escapes": "plain text without escapes",
+	} {
+		if got := FillBackground(input); got != want {
+			t.Errorf("FillBackground(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

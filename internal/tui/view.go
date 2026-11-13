@@ -20,6 +20,8 @@ func (m *Model) View() tea.View {
 		v.AltScreen, v.BackgroundColor = true, theme.Background
 		if m.opts.Settings.Appearance == "terminal" {
 			v.BackgroundColor = nil
+		} else {
+			v.Content = lipgloss.NewStyle().Background(theme.Background).Foreground(theme.Text).Width(max(1, m.width)).Height(max(1, m.height)).MaxWidth(max(1, m.width)).MaxHeight(max(1, m.height)).Render(theme.FillBackground(v.Content))
 		}
 		return v
 	}
@@ -49,8 +51,11 @@ func (m *Model) View() tea.View {
 	if m.opts.Settings.Appearance == "terminal" {
 		v.Content = theme.TerminalDefault(v.Content)
 		v.BackgroundColor, v.ForegroundColor = nil, nil
-	} else if m.opts.Settings.Appearance == "high-contrast" {
-		v.Content = theme.HighContrast(v.Content)
+	} else {
+		v.Content = theme.FillBackground(v.Content)
+		if m.opts.Settings.Appearance == "high-contrast" {
+			v.Content = theme.HighContrast(v.Content)
+		}
 	}
 	if m.opts.Settings.Mouse {
 		v.MouseMode = tea.MouseModeCellMotion
