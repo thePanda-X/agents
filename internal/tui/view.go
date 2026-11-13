@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -17,10 +18,9 @@ import (
 func (m *Model) View() tea.View {
 	if m.width < 32 || m.height < 12 {
 		v := tea.NewView(lipgloss.NewStyle().Width(max(1, m.width)).MaxHeight(max(1, m.height)).Render("agents\nResize terminal (32×12 minimum).\n" + m.binding("quit") + " quit"))
-		v.AltScreen, v.BackgroundColor = true, theme.Background
-		if m.opts.Settings.Appearance == "terminal" {
-			v.BackgroundColor = nil
-		} else {
+		v.AltScreen = true
+		if m.opts.Settings.Appearance != "terminal" {
+			m.setTerminalColors(&v, false)
 			v.Content = lipgloss.NewStyle().Background(theme.Background).Foreground(theme.Text).Width(max(1, m.width)).Height(max(1, m.height)).MaxWidth(max(1, m.width)).MaxHeight(max(1, m.height)).Render(theme.FillBackground(v.Content))
 		}
 		return v
@@ -46,12 +46,12 @@ func (m *Model) View() tea.View {
 		base = canvas.Render()
 	}
 	v := tea.NewView(base)
-	v.AltScreen, v.BackgroundColor, v.ForegroundColor = true, theme.Background, theme.Text
+	v.AltScreen = true
 	v.WindowTitle = m.windowTitle()
 	if m.opts.Settings.Appearance == "terminal" {
 		v.Content = theme.TerminalDefault(v.Content)
-		v.BackgroundColor, v.ForegroundColor = nil, nil
 	} else {
+		m.setTerminalColors(&v, true)
 		v.Content = theme.FillBackground(v.Content)
 		if m.opts.Settings.Appearance == "high-contrast" {
 			v.Content = theme.HighContrast(v.Content)
@@ -61,6 +61,24 @@ func (m *Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
+}
+
+// setTerminalDefaultColors controls whether the view changes the terminal's
+// default colors (OSC 10/11). Bubble Tea restores them with OSC 110/111 on exit
+// and before external process handoffs, but Windows consoles do not reliably
+// honor those resets and keep the application background afterwards. Every
+// cell is painted explicitly (theme.FillBackground), so the defaults are only
+// a cosmetic extra for terminal margins and are skipped on Windows.
+var setTerminalDefaultColors = runtime.GOOS != "windows"
+
+func (m *Model) setTerminalColors(v *tea.View, foreground bool) {
+	if !setTerminalDefaultColors {
+		return
+	}
+	v.BackgroundColor = theme.Background
+	if foreground {
+		v.ForegroundColor = theme.Text
+	}
 }
 
 func (m *Model) windowTitle() string {

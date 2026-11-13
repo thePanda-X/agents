@@ -61,3 +61,24 @@ func TestTerminalAppearanceKeepsDefaultBackground(t *testing.T) {
 		t.Fatal("terminal appearance must leave the background to the terminal")
 	}
 }
+
+func TestTerminalDefaultColorsAreOptional(t *testing.T) {
+	previous := setTerminalDefaultColors
+	t.Cleanup(func() { setTerminalDefaultColors = previous })
+	for _, size := range []struct{ width, height int }{{80, 30}, {24, 8}} {
+		for _, enabled := range []bool{true, false} {
+			setTerminalDefaultColors = enabled
+			m := seedScrollableSession(t)
+			m.Update(tea.WindowSizeMsg{Width: size.width, Height: size.height})
+			m.refresh()
+			v := m.View()
+			if got := v.BackgroundColor != nil; got != enabled {
+				t.Fatalf("%dx%d enabled=%v: background color set = %v", size.width, size.height, enabled, got)
+			}
+			// Without OSC 11 every cell must still carry the app background.
+			if missing := unpaintedCells(v.Content, size.width, size.height); missing > 0 {
+				t.Fatalf("%dx%d enabled=%v: %d cells unpainted", size.width, size.height, enabled, missing)
+			}
+		}
+	}
+}
