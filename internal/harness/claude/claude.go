@@ -22,6 +22,8 @@ func Descriptor() harness.Descriptor {
 		Launch:      harness.Launch{Command: command},
 		LoginHint:   "Sign in with `claude-agent-acp --cli auth login`, or set ANTHROPIC_API_KEY in your environment, then reconnect.",
 		Factory:     New,
+		// Accept edits still asks before commands, so only bypass is flagged.
+		PermissiveModes: []string{"bypassPermissions"},
 	}
 }
 

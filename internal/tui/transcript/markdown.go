@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 
 	"charm.land/glamour/v2/ansi"
@@ -20,6 +21,9 @@ import (
 type markdownRenderer struct {
 	markdown goldmark.Markdown
 	tables   *tableLayout
+	// cellGap is the blank space kept after a cell's widest content: Glamour's
+	// one-column cell margin plus the configured horizontal padding.
+	cellGap int
 }
 
 func newMarkdownRenderer(width int) *markdownRenderer {
@@ -33,6 +37,9 @@ func newMarkdownRenderer(width int) *markdownRenderer {
 	style.H2.Prefix, style.H3.Prefix, style.H4.Prefix = "", "", ""
 	style.Link.Color = new("#F2B8CF")
 	style.Code.Color, style.Code.BackgroundColor = new("#F2B8CF"), new("#27272D")
+	// The colored chip marks inline code. Padding spaces around it read as
+	// stray double spaces ("in  parse() .") once colors are removed.
+	style.Code.Prefix, style.Code.Suffix = "", ""
 	style.CodeBlock.Theme = "dracula"
 	padding := uint(1)
 	if width >= 60 {
@@ -53,7 +60,7 @@ func newMarkdownRenderer(width int) *markdownRenderer {
 	markdown.SetRenderer(renderer.NewRenderer(renderer.WithNodeRenderers(
 		util.Prioritized(ansi.NewRenderer(ansi.Options{Styles: style, WordWrap: width}), 1000),
 	)))
-	return &markdownRenderer{markdown: markdown, tables: tables}
+	return &markdownRenderer{markdown: markdown, tables: tables, cellGap: 1 + int(padding)}
 }
 
 func (r *markdownRenderer) Render(source string) (string, error) {
@@ -64,8 +71,132 @@ func (r *markdownRenderer) Render(source string) (string, error) {
 	// Markdown. Glamour supports Text segments but not synthetic String nodes.
 	data = append(data, r.tables.marker...)
 	err := r.markdown.Renderer().Render(&buffer, data, document)
-	return r.tables.rules(buffer.String()), err
+	return compactTables(r.tables.rules(buffer.String()), r.cellGap), err
 }
+
+// compactTables shrinks Glamour tables to their content. Glamour lays every
+// table out at the full wrap width, so a two-column table of short values
+// would otherwise span the whole terminal. Column boundaries come from the
+// header rule's "┼" junctions; rows are cut ANSI-safely at those columns, so
+// styling, wrapping, and wide characters are preserved. Tables that need the
+// full width are left unchanged.
+func compactTables(rendered string, gap int) string {
+	lines := strings.Split(rendered, "\n")
+	plain := make([]string, len(lines))
+	for i, line := range lines {
+		plain[i] = terminalansi.Strip(line)
+	}
+	for i := 0; i < len(lines); i++ {
+		junctions := ruleJunctions(plain[i])
+		if junctions == nil {
+			continue
+		}
+		member := func(index int) bool {
+			if j := ruleJunctions(plain[index]); j != nil {
+				return equalColumns(j, junctions)
+			}
+			return separatorsAt(plain[index], '│', junctions)
+		}
+		start, end := i, i
+		for start > 0 && member(start-1) {
+			start--
+		}
+		for end+1 < len(lines) && member(end+1) {
+			end++
+		}
+		bounds := make([][2]int, len(junctions)+1)
+		previous := 0
+		for k, junction := range junctions {
+			bounds[k] = [2]int{previous, junction}
+			previous = junction + 1
+		}
+		last := 0
+		for index := start; index <= end; index++ {
+			last = max(last, terminalansi.StringWidth(lines[index]))
+		}
+		bounds[len(junctions)] = [2]int{previous, last}
+		// For each column keep [offset, offset+width): drop surplus leading
+		// space (centered/right-aligned cells) beyond the standard gap, and
+		// trailing space beyond the gap. The first column keeps its leading
+		// indentation, which belongs to enclosing lists or quotes.
+		offsets, widths := make([]int, len(bounds)), make([]int, len(bounds))
+		for k, bound := range bounds {
+			right, lead, content := 0, bound[1]-bound[0], false
+			for index := start; index <= end; index++ {
+				if ruleJunctions(plain[index]) != nil {
+					continue
+				}
+				segment := terminalansi.Strip(terminalansi.Cut(lines[index], bound[0], bound[1]))
+				trimmed := strings.TrimRight(segment, " ")
+				if strings.TrimSpace(trimmed) == "" {
+					continue
+				}
+				content = true
+				right = max(right, terminalansi.StringWidth(trimmed))
+				lead = min(lead, terminalansi.StringWidth(trimmed)-terminalansi.StringWidth(strings.TrimLeft(trimmed, " ")))
+			}
+			if !content {
+				widths[k] = bound[1] - bound[0]
+				continue
+			}
+			if k > 0 {
+				offsets[k] = max(0, lead-gap)
+			}
+			widths[k] = right - offsets[k]
+			if k < len(junctions) {
+				widths[k] += gap
+			}
+			widths[k] = min(widths[k], bound[1]-bound[0]-offsets[k])
+		}
+		for index := start; index <= end; index++ {
+			var b strings.Builder
+			for k, bound := range bounds {
+				from := bound[0] + offsets[k]
+				b.WriteString(terminalansi.Cut(lines[index], from, from+widths[k]))
+				if k < len(junctions) {
+					b.WriteString(terminalansi.Cut(lines[index], junctions[k], junctions[k]+1))
+				}
+			}
+			lines[index] = b.String()
+		}
+		i = end
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ruleJunctions returns the cell columns of "┼" in a table rule line, or nil
+// when the line is not a rule.
+func ruleJunctions(plain string) []int {
+	trimmed := strings.TrimLeft(plain, " ")
+	if !strings.Contains(trimmed, "┼") || strings.Trim(trimmed, "─┼ ") != "" {
+		return nil
+	}
+	return runeColumns(plain, '┼')
+}
+
+func separatorsAt(plain string, separator rune, columns []int) bool {
+	found := runeColumns(plain, separator)
+	for _, column := range columns {
+		if !slices.Contains(found, column) {
+			return false
+		}
+	}
+	return true
+}
+
+func runeColumns(plain string, target rune) []int {
+	var columns []int
+	column := 0
+	for _, r := range plain {
+		if r == target {
+			columns = append(columns, column)
+		}
+		column += terminalansi.StringWidth(string(r))
+	}
+	return columns
+}
+
+func equalColumns(a, b []int) bool { return slices.Equal(a, b) }
 
 // Glamour's table style exposes horizontal padding but no row padding or
 // header-specific style. Marked presentation rows become horizontal rules after

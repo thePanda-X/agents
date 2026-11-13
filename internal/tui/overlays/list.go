@@ -365,9 +365,17 @@ func (l *List) View(width, height int) string {
 		hint = l.Hint
 	}
 	if width < 60 {
-		hint = "Enter · Esc close"
+		// Keep the verb when there is room; the tiniest panels fall back to
+		// bare keys so the dismissal hint is never truncated away.
+		hint = "Enter choose · Esc close"
+		if width < 40 {
+			hint = "Enter · Esc close"
+		}
 		if l.MultiSelect {
-			hint = "Tab mark · Enter · Esc"
+			hint = "Tab mark · Enter attach · Esc"
+			if width < 40 {
+				hint = "Tab mark · Enter · Esc"
+			}
 		} else if l.Error != "" {
 			hint = "Enter retry · Esc close"
 		} else if strings.Contains(l.Hint, "insert") {

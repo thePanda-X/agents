@@ -351,7 +351,9 @@ func (m *Model) perform(action string) tea.Cmd {
 		m.state.Notice = reason
 		return nil
 	}
-	m.recentActions = append([]string{action}, m.recentActions...)
+	if action != "palette" {
+		m.recentActions = append([]string{action}, slices.DeleteFunc(m.recentActions, func(id string) bool { return id == action })...)
+	}
 	if len(m.recentActions) > 20 {
 		m.recentActions = m.recentActions[:20]
 	}

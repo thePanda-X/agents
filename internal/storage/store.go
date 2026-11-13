@@ -29,6 +29,7 @@ type Settings struct {
 	Compact       bool              `json:"compact,omitempty"`
 	Appearance    string            `json:"appearance,omitempty"`
 	ReducedMotion bool              `json:"reducedMotion,omitempty"`
+	Clock24       bool              `json:"clock24,omitempty"`
 	Keybindings   map[string]string `json:"keybindings,omitempty"`
 	Agents        []CustomAgent     `json:"agents,omitempty"`
 	MCP           json.RawMessage   `json:"mcpServers,omitempty"`

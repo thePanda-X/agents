@@ -23,6 +23,7 @@ type cached struct {
 	revision, seen uint64
 	width, height  int
 	compact        bool
+	clock24        bool
 	expanded       bool
 	at             time.Time
 	role, source   string
@@ -35,15 +36,18 @@ type Renderer struct {
 	width        int
 	conversation *app.Conversation
 	generation   uint64
+	stats        map[*harness.Diff]diffStat
 }
 
-func New() *Renderer { return &Renderer{cache: make(map[*app.Entry]cached)} }
+func New() *Renderer {
+	return &Renderer{cache: make(map[*app.Entry]cached), stats: make(map[*harness.Diff]diffStat)}
+}
 
 // Detail renders a single entry without the transcript gutter or collapsed
 // sections. Raw entry text remains authoritative for clipboard/editor exports.
 func (r *Renderer) Detail(entry *app.Entry, width int, terminals map[string]string) string {
 	if entry.Tool != nil {
-		return r.tool(entry.Tool, true, terminals, max(10, width), 0)
+		return r.tool(entry.Tool, true, terminals, max(10, width), 0, true)
 	}
 	text := theme.Clean(entry.Text)
 	if entry.Role == "thought" && strings.TrimSpace(text) == "" {
@@ -63,6 +67,7 @@ type Options struct {
 	Search            string
 	SearchOccurrence  int
 	ReducedMotion     bool
+	Clock24           bool
 	Expanded          map[string]bool
 	Terminals         map[string]string
 }
@@ -70,6 +75,7 @@ type Options struct {
 func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) {
 	if r.conversation != c {
 		clear(r.cache)
+		clear(r.stats)
 		r.conversation = c
 	}
 	if c == nil || len(c.Entries) == 0 {
@@ -98,58 +104,34 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 		if index < skipUntil {
 			continue
 		}
-		if options.Compact && index > 0 {
-			previous := c.Entries[index-1]
-			activity := func(e *app.Entry) bool { return e.Tool != nil || e.Role == "thought" }
-			response := func(e *app.Entry) bool { return e.Tool == nil && e.Role == "assistant" }
-			user := func(e *app.Entry) bool { return e.Tool == nil && e.Role == "user" }
-			if user(previous) || user(entry) || activity(previous) && response(entry) || response(previous) && activity(entry) {
-				// Separate sent prompts and model prose from surrounding activity,
-				// while keeping activity runs dense. Include the spacer in row indexes.
-				blocks = append(blocks, "")
-				lines++
-			}
+		if index > 0 && spacerBefore(c.Entries[index-1], entry, options.Compact) {
+			// Blocks are joined by single newlines; blank rows are explicit
+			// spacer blocks so row indexes always match the rendered output.
+			blocks = append(blocks, "")
+			lines++
 		}
 		positions[index] = lines
 		// Compact composition groups thinking and successful tools, including
 		// file changes. Active, failed and explicitly expanded entries stay visible.
 		if options.Compact && !options.Focused {
 			end := index
-			tools, thoughts := 0, 0
 			for end < len(c.Entries) {
 				next := c.Entries[end]
 				if next.Tool != nil {
 					if next.Tool.Status != "completed" || options.Expanded[next.ID] {
 						break
 					}
-					tools++
 				} else if next.Role == "thought" {
 					if options.Expanded[next.ID+fmt.Sprint(end)] {
 						break
 					}
-					thoughts++
 				} else {
 					break
 				}
 				end++
 			}
 			if end-index >= 2 {
-				var labels []string
-				if tools > 0 {
-					label := "successful tools"
-					if tools == 1 {
-						label = "successful tool"
-					}
-					labels = append(labels, fmt.Sprintf("%d %s", tools, label))
-				}
-				if thoughts > 0 {
-					label := "thinking blocks"
-					if thoughts == 1 {
-						label = "thinking block"
-					}
-					labels = append(labels, fmt.Sprintf("%d %s", thoughts, label))
-				}
-				block := "  " + theme.Success.Render("▸ "+strings.Join(labels, " · ")) + theme.Quiet.Render(" · Tab to inspect")
+				block := "  " + theme.Success.Render("▸ "+activitySummary(c.Entries[index:end])) + theme.Quiet.Render(" · Tab to inspect")
 				block = ansi.Truncate(block, width, "…")
 				blocks = append(blocks, block)
 				for member := index; member < end; member++ {
@@ -166,25 +148,31 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 			if options.ReducedMotion {
 				frame = -1
 			}
-			block = r.tool(entry.Tool, options.Expanded[entry.ID], options.Terminals, width-2, frame)
+			// While searching, show complete output so a match beyond the cap
+			// is visible and highlighted where the search reveals it.
+			block = r.tool(entry.Tool, options.Expanded[entry.ID], options.Terminals, width-2, frame, search != nil)
 		} else if entry.Role == "thought" {
-			label := "◇ Thinking"
+			// Thinking folds use the same ▸/▾ arrows as tools, so the open/closed
+			// state reads identically across every foldable entry.
+			label := "Thinking"
 			if duration, ok := thoughtDuration(c.Entries, index); ok {
-				label = "◇ Thought · " + formatThoughtDuration(duration)
+				label = "Thought · " + formatThoughtDuration(duration)
 			}
-			block = theme.Quiet.Render(label)
 			expanded, overridden := options.Expanded[entry.ID+fmt.Sprint(index)]
 			if !overridden {
 				expanded = options.Thoughts
 			}
 			text := theme.Clean(entry.Text)
+			arrow := "▸ "
+			if expanded && strings.TrimSpace(text) != "" {
+				arrow = "▾ "
+			}
+			block = theme.Quiet.Render(arrow + label)
 			if strings.TrimSpace(text) == "" {
 				block += theme.Quiet.Render(" · no text supplied by agent")
 				block = lipgloss.Wrap(block, width-2, " ")
 			} else if expanded {
 				block += "\n" + theme.Quiet.Render(lipgloss.Wrap(text, width-2, " "))
-			} else {
-				block += theme.Quiet.Render(" · collapsed")
 			}
 			block = NormalizeWidth(block, width-2)
 		} else {
@@ -192,14 +180,11 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 			if entry.Role == "user" && LargeText(entry.Text) {
 				expanded = options.Expanded[entry.ID+fmt.Sprint(index)]
 			}
-			cacheEntry := r.message(entry, width, options.Compact, expanded)
+			cacheEntry := r.message(entry, width, options.Compact, expanded, options.Clock24)
 			block = cacheEntry.text
 			if search == nil && !(options.Focused && index == options.Selected) {
 				blocks = append(blocks, cacheEntry.block)
-				lines += cacheEntry.height + 1
-				if options.Compact {
-					lines--
-				}
+				lines += cacheEntry.height
 				continue
 			}
 		}
@@ -217,27 +202,94 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 		// A stable gutter avoids rewrapping/clipping content when focus changes.
 		block = lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(2).Render(gutter), block)
 		blocks = append(blocks, block)
-		// Height already includes the first row. Two separating newlines add
-		// one blank row; compact's single newline adds no blank row.
-		lines += lipgloss.Height(block) + 1
-		if options.Compact {
-			lines--
-		}
+		lines += lipgloss.Height(block)
 	}
-	separator := "\n\n"
-	if options.Compact {
-		separator = "\n"
-	}
-	return strings.Join(blocks, separator), positions
+	return strings.Join(blocks, "\n"), positions
 }
 
-func (r *Renderer) message(entry *app.Entry, width int, compact, expanded bool) cached {
+// activitySummary describes a compact group by what the agent did rather than
+// how many entries it hides: "Read 3 files · 1 edit · ran 2 commands · 1
+// thought". Kinds follow ACP's tool kinds; unknown kinds count as tools.
+func activitySummary(entries []*app.Entry) string {
+	counts := make(map[string]int)
+	for _, entry := range entries {
+		kind := "thought"
+		if entry.Tool != nil {
+			kind = entry.Tool.Kind
+		}
+		switch kind {
+		case "read", "edit", "execute", "search", "fetch", "thought":
+		case "think":
+			kind = "thought"
+		case "delete", "move":
+			kind = "file"
+		default:
+			kind = "other"
+		}
+		counts[kind]++
+	}
+	plural := func(n int, one, many string) string {
+		if n == 1 {
+			return one
+		}
+		return many
+	}
+	var parts []string
+	for _, kind := range []string{"read", "search", "edit", "file", "execute", "fetch", "other", "thought"} {
+		n := counts[kind]
+		if n == 0 {
+			continue
+		}
+		var part string
+		switch kind {
+		case "read":
+			part = fmt.Sprintf("read %d %s", n, plural(n, "file", "files"))
+		case "search":
+			part = fmt.Sprintf("%d %s", n, plural(n, "search", "searches"))
+		case "edit":
+			part = fmt.Sprintf("%d %s", n, plural(n, "edit", "edits"))
+		case "file":
+			part = fmt.Sprintf("%d file %s", n, plural(n, "operation", "operations"))
+		case "execute":
+			part = fmt.Sprintf("ran %d %s", n, plural(n, "command", "commands"))
+		case "fetch":
+			part = fmt.Sprintf("%d %s", n, plural(n, "fetch", "fetches"))
+		case "other":
+			part = fmt.Sprintf("%d %s", n, plural(n, "tool", "tools"))
+		case "thought":
+			part = fmt.Sprintf("%d %s", n, plural(n, "thought", "thoughts"))
+		}
+		parts = append(parts, part)
+	}
+	summary := strings.Join(parts, " · ")
+	return strings.ToUpper(summary[:1]) + summary[1:]
+}
+
+// spacerBefore decides whether a blank row separates two adjacent entries.
+// Runs of tool calls and thinking stay dense in both layouts so a long agent
+// turn does not double in height. Comfortable layout separates everything
+// else; compact layout only separates sent prompts and model prose from the
+// surrounding activity.
+func spacerBefore(previous, entry *app.Entry, compact bool) bool {
+	activity := func(e *app.Entry) bool { return e.Tool != nil || e.Role == "thought" }
+	if activity(previous) && activity(entry) {
+		return false
+	}
+	if !compact {
+		return true
+	}
+	response := func(e *app.Entry) bool { return e.Tool == nil && e.Role == "assistant" }
+	user := func(e *app.Entry) bool { return e.Tool == nil && e.Role == "user" }
+	return user(previous) || user(entry) || activity(previous) && response(entry) || response(previous) && activity(entry)
+}
+
+func (r *Renderer) message(entry *app.Entry, width int, compact, expanded, clock24 bool) cached {
 	value, ok := r.cache[entry]
 	if !ok || value.revision != entry.Revision || value.width != width ||
-		value.compact != compact || value.expanded != expanded || value.source != entry.Text || value.role != entry.Role || !value.at.Equal(entry.At) {
+		value.compact != compact || value.clock24 != clock24 || value.expanded != expanded || value.source != entry.Text || value.role != entry.Role || !value.at.Equal(entry.At) {
 		text := ""
 		if entry.Role == "user" {
-			text = renderUser(entry, width, compact, expanded)
+			text = renderUser(entry, width, compact, expanded, clock24)
 		} else {
 			text = theme.Clean(entry.Text)
 			if rendered, err := r.markdown.Render(text); err == nil {
@@ -250,7 +302,7 @@ func (r *Renderer) message(entry *app.Entry, width int, compact, expanded bool) 
 		// viewport and horizontal scrolling stays impossible.
 		text = NormalizeWidth(text, width-2)
 		block := lipgloss.JoinHorizontal(lipgloss.Top, lipgloss.NewStyle().Width(2).Render(""), text)
-		value = cached{revision: entry.Revision, width: width, compact: compact, expanded: expanded, at: entry.At,
+		value = cached{revision: entry.Revision, width: width, compact: compact, clock24: clock24, expanded: expanded, at: entry.At,
 			role: entry.Role, source: entry.Text, text: text, block: block, height: lipgloss.Height(block)}
 	}
 	value.seen = r.generation
@@ -266,7 +318,7 @@ func (r *Renderer) pruneCache() {
 	}
 }
 
-func renderUser(entry *app.Entry, width int, compact, expanded bool) string {
+func renderUser(entry *app.Entry, width int, compact, expanded, clock24 bool) string {
 	// Reserve the gutter (2), left rail (1), and horizontal padding (2).
 	innerWidth := width - 5
 	text := entry.Text
@@ -280,7 +332,11 @@ func renderUser(entry *app.Entry, width int, compact, expanded bool) string {
 	left := theme.Body.Background(theme.Surface).Bold(true).Render("› " + first)
 	right := ""
 	if !entry.At.IsZero() {
-		right = theme.Quiet.Background(theme.Surface).Render(entry.At.Local().Format("3:04 PM"))
+		layout := "3:04 PM"
+		if clock24 {
+			layout = "15:04"
+		}
+		right = theme.Quiet.Background(theme.Surface).Render(entry.At.Local().Format(layout))
 	}
 	block := left
 	if gap := innerWidth - lipgloss.Width(left) - lipgloss.Width(right); right != "" && gap >= 2 {
@@ -403,35 +459,52 @@ func NormalizeWidth(block string, width int) string {
 
 var toolSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]string, width, spinnerFrame int) string {
+// toolOutputLimit bounds each tool output section in the transcript. The
+// detail pager (o) and exports always show the complete text.
+const toolOutputLimit = 30
+
+func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]string, width, spinnerFrame int, full bool) string {
 	icon, statusStyle := "▸", theme.Quiet
 	if expanded {
 		icon = "▾"
 	}
+	status := theme.Quiet.Render(theme.Clean(t.Status))
 	switch t.Status {
 	case "completed":
 		statusStyle = theme.Success
+		status = r.diffStats(t)
 	case "failed":
 		statusStyle = theme.Error
+		status = theme.Error.Render("failed")
 	case "pending", "in_progress":
 		icon, statusStyle = toolSpinnerFrames[max(0, spinnerFrame)%len(toolSpinnerFrames)], theme.Accent
 		if spinnerFrame < 0 {
 			icon = "◌"
 		}
+		status = theme.Accent.Render("running")
+		if t.Status == "pending" {
+			status = theme.Quiet.Render("pending")
+		}
 	}
-	heading := theme.Line(statusStyle.Render(icon+" "+theme.Clean(t.Title)), statusStyle.Render(t.Status), width)
+	heading := theme.Line(statusStyle.Render(icon+" "+theme.Clean(t.Title)), status, width)
 	if !expanded {
 		return heading
+	}
+	section := func(text string) string {
+		if full {
+			return text
+		}
+		return capLines(text, toolOutputLimit)
 	}
 	parts := []string{heading}
 	if len(t.Locations) > 0 {
 		parts = append(parts, theme.Quiet.Render(theme.Clean(strings.Join(t.Locations, "\n"))))
 	}
 	if len(t.Input) > 0 {
-		parts = append(parts, theme.Quiet.Render("Input"), pretty(t.Input))
+		parts = append(parts, theme.Quiet.Render("Input"), section(pretty(t.Input)))
 	}
 	if t.Text != "" {
-		parts = append(parts, theme.Clean(t.Text))
+		parts = append(parts, section(theme.Clean(t.Text)))
 	}
 	for _, diff := range t.Diffs {
 		parts = append(parts, RenderDiff(diff))
@@ -439,23 +512,92 @@ func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]st
 	parts = append(parts, toolDiffPreviews(t)...)
 	for _, id := range t.Terminals {
 		if output := terminals[id]; output != "" {
-			parts = append(parts, theme.Quiet.Render("Terminal output"), theme.Clean(output))
+			parts = append(parts, theme.Quiet.Render("Terminal output"), section(theme.Clean(output)))
 		}
 	}
 	if len(t.Output) > 0 {
-		parts = append(parts, theme.Quiet.Render("Output"), pretty(t.Output))
+		parts = append(parts, theme.Quiet.Render("Output"), section(pretty(t.Output)))
 	}
 	return NormalizeWidth(lipgloss.Wrap(strings.Join(parts, "\n"), width, " "), width)
 }
 
+// capLines keeps the first limit lines of text and states how many were
+// hidden, so one large command cannot flood the conversation.
+func capLines(text string, limit int) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) <= limit {
+		return text
+	}
+	hidden := len(lines) - limit
+	return strings.Join(lines[:limit], "\n") + "\n" + theme.Quiet.Render(fmt.Sprintf("… %d more lines · o in browse mode shows everything", hidden))
+}
+
+type diffStat struct {
+	oldLen, newLen int
+	added, removed int
+}
+
+// diffStats summarizes a completed tool's structured diffs as "+added −removed".
+// Results are cached per diff because the transcript re-renders on every
+// spinner tick while a turn is running.
+func (r *Renderer) diffStats(t *app.ToolState) string {
+	added, removed := 0, 0
+	for i := range t.Diffs {
+		diff := &t.Diffs[i]
+		stat, ok := r.stats[diff]
+		if !ok || stat.oldLen != len(diff.OldText) || stat.newLen != len(diff.NewText) {
+			stat = diffStat{oldLen: len(diff.OldText), newLen: len(diff.NewText)}
+			matcher := difflib.NewMatcher(diffLines(diff.OldText), diffLines(diff.NewText))
+			for _, op := range matcher.GetOpCodes() {
+				switch op.Tag {
+				case 'r':
+					stat.removed += op.I2 - op.I1
+					stat.added += op.J2 - op.J1
+				case 'd':
+					stat.removed += op.I2 - op.I1
+				case 'i':
+					stat.added += op.J2 - op.J1
+				}
+			}
+			r.stats[diff] = stat
+		}
+		added, removed = added+stat.added, removed+stat.removed
+	}
+	if added == 0 && removed == 0 {
+		return ""
+	}
+	return theme.Success.Render(fmt.Sprintf("+%d", added)) + " " + theme.Error.Render(fmt.Sprintf("−%d", removed))
+}
+
+// diffLines splits text into newline-terminated lines. difflib.SplitLines
+// appends a phantom empty line to text that already ends in a newline, which
+// rendered as a blank context row at the end of every diff.
+func diffLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	lines := strings.SplitAfter(text, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	} else {
+		lines[len(lines)-1] += "\n"
+	}
+	return lines
+}
+
 func RenderDiff(diff harness.Diff) string {
-	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: difflib.SplitLines(diff.OldText), B: difflib.SplitLines(diff.NewText), FromFile: "a/" + theme.Clean(diff.Path), ToFile: "b/" + theme.Clean(diff.Path), Context: 3})
+	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: diffLines(diff.OldText), B: diffLines(diff.NewText), FromFile: "a/" + theme.Clean(diff.Path), ToFile: "b/" + theme.Clean(diff.Path), Context: 3})
 	if err != nil {
 		return theme.Error.Render("Cannot render diff: " + err.Error())
 	}
-	lines := strings.Split(theme.Clean(text), "\n")
+	// The unified diff ends with a newline; trimming it avoids blank rows
+	// between a diff and whatever follows it.
+	lines := strings.Split(strings.TrimRight(theme.Clean(text), "\n"), "\n")
 	for i, line := range lines {
 		switch {
+		// File headers start with ---/+++ but are not removed/added lines.
+		case strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++"):
+			lines[i] = theme.Quiet.Bold(true).Render(line)
 		case strings.HasPrefix(line, "+"):
 			lines[i] = theme.Success.Render(line)
 		case strings.HasPrefix(line, "-"):

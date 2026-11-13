@@ -17,9 +17,9 @@ func TestThoughtLabelIncludesElapsedTime(t *testing.T) {
 		elapsed time.Duration
 		want    string
 	}{
-		{"seconds", 2 * time.Second, "◇ Thought · 2.0s"},
-		{"minutes", 65 * time.Second, "◇ Thought · 1m 5s"},
-		{"hours", 2*time.Hour + 3*time.Minute + 4*time.Second, "◇ Thought · 2h 3m 4s"},
+		{"seconds", 2 * time.Second, "▸ Thought · 2.0s"},
+		{"minutes", 65 * time.Second, "▸ Thought · 1m 5s"},
+		{"hours", 2*time.Hour + 3*time.Minute + 4*time.Second, "▸ Thought · 2h 3m 4s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &app.Conversation{Entries: []*app.Entry{
@@ -40,7 +40,7 @@ func TestThoughtLabelFallsBackWithoutTimestamps(t *testing.T) {
 		{Role: "assistant", Text: "done"},
 	}}
 	content, _ := New().Render(c, Options{Width: 60})
-	if !strings.Contains(ansi.Strip(content), "◇ Thinking") {
+	if !strings.Contains(ansi.Strip(content), "▸ Thinking") {
 		t.Fatalf("replayed thought lost its label: %q", ansi.Strip(content))
 	}
 }
@@ -52,7 +52,7 @@ func TestThoughtDoesNotBorrowDurationAcrossTurns(t *testing.T) {
 		{Role: "user", Text: "next task", At: start.Add(2 * time.Second)},
 	}}
 	content, _ := New().Render(c, Options{Width: 60})
-	if got := ansi.Strip(content); !strings.Contains(got, "◇ Thinking") || strings.Contains(got, "Thought ·") {
+	if got := ansi.Strip(content); !strings.Contains(got, "▸ Thinking") || strings.Contains(got, "Thought ·") {
 		t.Fatalf("thought borrowed the next turn's timestamp: %q", got)
 	}
 }

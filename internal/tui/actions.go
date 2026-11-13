@@ -65,26 +65,70 @@ func selectListID(list *overlays.List, id string) {
 	}
 }
 
+// paletteRecentLimit bounds the "Recent" group so it stays a shortcut rather
+// than duplicating the whole catalog.
+const paletteRecentLimit = 4
+
 func (m *Model) openPalette() {
+	byID := make(map[string]overlays.Item)
 	var items []overlays.Item
 	for _, action := range actionCatalog {
-		group := actionGroup(action.ID)
-		items = append(items, overlays.Item{ID: action.ID, Label: action.Label, Detail: m.binding(action.ID), Group: group, DisabledReason: m.actionUnavailable(action.ID), Preview: action.Label + "\n\n" + group + " · " + m.binding(action.ID)})
+		// The palette is already open; listing it inside itself is noise.
+		if action.ID == "palette" {
+			continue
+		}
+		item := m.paletteItem(action)
+		byID[action.ID] = item
+		items = append(items, item)
 	}
+	groups := []string{"Conversation", "Agent", "Attachments", "Review", "Interface"}
 	slices.SortStableFunc(items, func(a, b overlays.Item) int {
-		rank := func(id string) int {
-			if index := slices.Index(m.recentActions, id); index >= 0 {
-				return index
-			}
-			return len(m.recentActions)
-		}
-		if delta := rank(a.ID) - rank(b.ID); delta != 0 {
-			return delta
-		}
-		groups := []string{"Conversation", "Agent", "Attachments", "Review", "Interface"}
 		return slices.Index(groups, a.Group) - slices.Index(groups, b.Group)
 	})
-	m.openList("palette", "Commands", items)
+	var recent []overlays.Item
+	for _, id := range m.recentActions {
+		if item, ok := byID[id]; ok && len(recent) < paletteRecentLimit {
+			item.Group = "Recent"
+			recent = append(recent, item)
+		}
+	}
+	m.openList("palette", "Commands", append(recent, items...))
+	m.list.GroupHeaders = true
+}
+
+// paletteItem shows an action's shortcut, or its slash command when it has
+// none, so the palette also teaches commands. The preview explains the action.
+func (m *Model) paletteItem(action actionSpec) overlays.Item {
+	group := actionGroup(action.ID)
+	detail, keywords := m.binding(action.ID), ""
+	description := action.Label
+	var slash string
+	for _, command := range localSlashCommands {
+		if command.Action != action.ID {
+			continue
+		}
+		slash = "/" + command.Name
+		description = command.Description
+		keywords = strings.Join(command.Aliases, " ") + " " + command.Name
+		if len(command.Aliases) > 0 {
+			slash += " (also /" + strings.Join(command.Aliases, ", /") + ")"
+		}
+		if detail == "—" {
+			detail = "/" + command.Name
+		}
+		break
+	}
+	if detail == "—" {
+		detail = ""
+	}
+	preview := action.Label + "\n\n" + description + "\n\nGroup: " + group
+	if key := m.binding(action.ID); key != "—" {
+		preview += "\nShortcut: " + key
+	}
+	if slash != "" {
+		preview += "\nCommand: " + slash
+	}
+	return overlays.Item{ID: action.ID, Label: action.Label, Detail: detail, Keywords: keywords, Group: group, DisabledReason: m.actionUnavailable(action.ID), Preview: preview}
 }
 
 func (m *Model) openSessions() tea.Cmd {
@@ -412,6 +456,7 @@ func (m *Model) openSettings() {
 		{ID: "compact", Label: "Compact layout", Detail: onOff(m.opts.Settings.Compact)},
 		{ID: "appearance", Label: "Appearance", Detail: appearanceName(m.opts.Settings.Appearance), Preview: "Enter cycles Graphite, High contrast, and Terminal default (no application colors)."},
 		{ID: "motion", Label: "Reduced motion", Detail: onOff(m.opts.Settings.ReducedMotion)},
+		{ID: "clock24", Label: "24-hour message times", Detail: onOff(m.opts.Settings.Clock24), Preview: "Show sent-message times as 15:04 instead of 3:04 PM."},
 	})
 	m.list.Hint = "Enter toggle · Esc close"
 	if m.opts.Store != nil {
@@ -452,6 +497,8 @@ func (m *Model) toggleSetting(item overlays.Item) tea.Cmd {
 		cmd = m.toggleCompact()
 	case "motion":
 		m.opts.Settings.ReducedMotion = !m.opts.Settings.ReducedMotion
+	case "clock24":
+		m.opts.Settings.Clock24 = !m.opts.Settings.Clock24
 	case "appearance":
 		switch m.opts.Settings.Appearance {
 		case "high-contrast":

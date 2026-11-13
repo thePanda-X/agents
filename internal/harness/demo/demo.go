@@ -16,7 +16,7 @@ import (
 )
 
 func Descriptor() harness.Descriptor {
-	return harness.Descriptor{ID: "demo", Name: "Demo", Description: "Local ACP test agent · no model calls or file edits", Factory: New}
+	return harness.Descriptor{ID: "demo", Name: "Demo", Description: "Local ACP test agent · no model calls or file edits", Factory: New, PermissiveModes: []string{"bypass"}}
 }
 
 type saved struct {
@@ -67,11 +67,23 @@ func selectOption(id, name, category, current string, names ...string) acp.Sessi
 	return acp.SessionConfigOption{ID: acp.SessionConfigID(id), Name: name, Category: acp.OptValue(acp.SessionConfigOptionCategory(category)), Value: &acp.SessionConfigSelect{CurrentValue: acp.SessionConfigValueID(current), Options: &choices}}
 }
 
+// modeOption is a select option whose choices have display names distinct
+// from their values, as real harnesses advertise them.
+func modeOption(current string, choices ...[2]string) acp.SessionConfigOption {
+	options := acp.SessionConfigSelectOptionsUngrouped{}
+	for _, choice := range choices {
+		options = append(options, acp.SessionConfigSelectOption{Value: acp.SessionConfigValueID(choice[0]), Name: choice[1]})
+	}
+	return acp.SessionConfigOption{ID: "mode", Name: "Mode", Category: acp.OptValue(acp.SessionConfigOptionCategory("mode")), Value: &acp.SessionConfigSelect{CurrentValue: acp.SessionConfigValueID(current), Options: &options}}
+}
+
 func defaultOptions() []acp.SessionConfigOption {
 	return []acp.SessionConfigOption{
 		selectOption("model", "Model", "model", "Demo model", "Demo model", "Another model"),
 		selectOption("effort", "Effort", "thought_level", "high", "low", "medium", "high"),
-		selectOption("mode", "Mode", "mode", "build", "plan", "build"),
+		// Bypass is simulated: the demo never edits files or runs commands.
+		// It shows how the composer flags a permissive mode (Shift+Tab).
+		modeOption("build", [2]string{"plan", "Plan"}, [2]string{"build", "Build"}, [2]string{"bypass", "Bypass permissions"}),
 		{ID: "verbose", Name: "Verbose output", Value: &acp.SessionConfigBoolean{}},
 	}
 }
@@ -208,12 +220,11 @@ func (a *agentState) prompt(ctx context.Context, session *acp.AgentSession, r *a
 		}
 		_ = emit(chunk("assistant", fmt.Sprintf("Structured response received: `%T`. No files were changed.", response.Value)))
 	} else {
-		_ = emit(chunk("thought", "I'll keep the interface quiet, with details available when you need them."))
-		_ = emit(&acp.Plan{Entries: []acp.PlanEntry{{Content: "Inspect the workspace", Priority: acp.PlanEntryPriorityMedium, Status: acp.PlanEntryStatusCompleted}, {Content: "Preview the configuration change", Priority: acp.PlanEntryPriorityMedium, Status: acp.PlanEntryStatusCompleted}}})
-		_ = emit(&acp.ToolCall{ToolCallID: acp.ToolCallID(fmt.Sprintf("preview-%d", time.Now().UnixNano())), Title: "Preview configuration change · simulated", Kind: acp.OptValue(acp.ToolKindEdit), Status: acp.OptValue(acp.ToolCallStatusCompleted), Content: []acp.ToolCallContent{&acp.Diff{Path: "config.go", OldText: acp.OptValue("const accent = \"blue\"\n"), NewText: "const accent = \"pink\"\n"}}})
-		answer := "## A calmer coding workspace\n\nOne interface for your coding agents, with **soft pink accents** and graphite surfaces.\n\n- Streamed responses, tools, and reviewable diffs.\n- Agent-provided models, effort, modes, and slash commands.\n- Permissions and structured questions without blocking the conversation.\n\n```go\nregistry.Register(opencode.Descriptor())\n```\n\nPress **Tab** to browse the transcript, **Ctrl+O** for session options, or **Ctrl+P** for commands. Try `/permission`, `/question`, or `/slow`.\n\n*This is a local ACP demo. No model was called and no files were changed.*"
+		answer := demoAnswer
 		if strings.HasPrefix(text, "/slow") {
 			answer = strings.Repeat("Streaming a cancellable response…\n\n", 40)
+		} else if !demoActivity(ctx, emit, chunk) {
+			return cancelled()
 		}
 		for _, part := range strings.SplitAfter(answer, " ") {
 			select {
@@ -228,7 +239,92 @@ func (a *agentState) prompt(ctx context.Context, session *acp.AgentSession, r *a
 				return nil, err
 			}
 		}
-		_ = session.Update(ctx, &acp.SessionUpdateParams{Update: &acp.UsageUpdate{Used: 4200, Size: 200000}})
+		// Above 80% of the window, so the header's context meter turns amber.
+		_ = session.Update(ctx, &acp.SessionUpdateParams{Update: &acp.UsageUpdate{Used: 172400, Size: 200000}})
 	}
 	return &acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
+}
+
+// demoAnswer is the scripted response. Its table and inline code show the
+// natural-width Markdown tables; the rows are a short tour of the interface.
+const demoAnswer = "## A calmer coding workspace\n\n" +
+	"This simulated turn shows the interface. **No model was called and no files were changed.**\n\n" +
+	"| Try | What you will see |\n" +
+	"| --- | --- |\n" +
+	"| `Tab`, `↑`, `Enter` | Expand a tool; long output is capped |\n" +
+	"| `o` while browsing | The complete tool output |\n" +
+	"| `Ctrl+X` | Compact layout summarizes activity |\n" +
+	"| `Shift+Tab` | Bypass mode, flagged in amber |\n" +
+	"| `Ctrl+P` | Palette with recent actions |\n" +
+	"| `/settings` | 24-hour message times |\n\n" +
+	"The header's `ctx` meter turns amber above 80% of the context window, and `+3 −1` beside an edit summarizes its diff.\n\n" +
+	"```go\nregistry.Register(opencode.Descriptor())\n```\n\n" +
+	"Try `/permission`, `/question`, or `/slow` for approvals, forms, and cancellation."
+
+// demoActivity streams simulated tool activity covering every tool state: a
+// compact-groupable run (thinking, reads, a search, an edit with a diff), a
+// command that runs long enough to show its spinner and then reports long
+// output, and a failure. Nothing touches the workspace. It returns false when
+// the turn is cancelled.
+func demoActivity(ctx context.Context, emit func(acp.SessionUpdate) error, chunk func(role, text string) acp.SessionUpdate) bool {
+	pause := func(d time.Duration) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	prefix := fmt.Sprintf("demo-%d-", time.Now().UnixNano())
+	tool := func(id, title string, kind acp.ToolKind, status acp.ToolCallStatus, content []acp.ToolCallContent, locations ...acp.ToolCallLocation) acp.SessionUpdate {
+		return &acp.ToolCall{ToolCallID: acp.ToolCallID(prefix + id), Title: title + " · simulated", Kind: acp.OptValue(kind), Status: acp.OptValue(status), Content: content, Locations: locations}
+	}
+	text := func(value string) []acp.ToolCallContent {
+		return []acp.ToolCallContent{&acp.Content{Content: &acp.TextContent{Text: value}}}
+	}
+	at := func(path string, line uint32) acp.ToolCallLocation {
+		return acp.ToolCallLocation{Path: path, Line: acp.OptValue(line)}
+	}
+	var testOutput strings.Builder
+	for _, name := range []string{"Banner", "Footer", "Palette", "Header", "Composer", "Diff", "Table", "Transcript", "Search", "Settings"} {
+		for _, variant := range []string{"Wide", "Narrow", "Compact", "Comfortable"} {
+			fmt.Fprintf(&testOutput, "=== RUN   Test%s%s\n--- PASS: Test%s%s (0.00s)\n", name, variant, name, variant)
+		}
+	}
+	testOutput.WriteString("PASS\nok  \tagents/internal/tui\t0.412s")
+
+	_ = emit(&acp.Plan{Entries: []acp.PlanEntry{
+		{Content: "Inspect the interface code", Priority: acp.PlanEntryPriorityMedium, Status: acp.PlanEntryStatusCompleted},
+		{Content: "Preview a configuration change", Priority: acp.PlanEntryPriorityMedium, Status: acp.PlanEntryStatusCompleted},
+		{Content: "Run the checks", Priority: acp.PlanEntryPriorityMedium, Status: acp.PlanEntryStatusCompleted},
+	}})
+	steps := []struct {
+		update acp.SessionUpdate
+		wait   time.Duration
+	}{
+		{chunk("thought", "I'll look around before changing anything, and keep details available on demand."), 500 * time.Millisecond},
+		{tool("read-view", "Read internal/tui/view.go", acp.ToolKindRead, acp.ToolCallStatusCompleted, nil, at("internal/tui/view.go", 1)), 150 * time.Millisecond},
+		{tool("read-theme", "Read internal/tui/theme/theme.go", acp.ToolKindRead, acp.ToolCallStatusCompleted, nil, at("internal/tui/theme/theme.go", 1)), 150 * time.Millisecond},
+		{tool("search", `Search for "composerMeta"`, acp.ToolKindSearch, acp.ToolCallStatusCompleted, text("internal/tui/view.go:301: func (m *Model) composerMeta() string\ninternal/tui/view.go:83: return frame.Render(m.input.View()) + \"\n\" + composerBottom(width, m.composerMeta(), border)")), 150 * time.Millisecond},
+		{chunk("thought", "The accent and clock preference live in one place; a small edit covers both."), 400 * time.Millisecond},
+		{tool("edit", "Edit config.go", acp.ToolKindEdit, acp.ToolCallStatusCompleted, []acp.ToolCallContent{&acp.Diff{
+			Path:    "config.go",
+			OldText: acp.OptValue("package config\n\nconst accent = \"blue\"\nconst density = \"comfortable\"\n"),
+			NewText: "package config\n\nconst accent = \"pink\"\nconst density = \"comfortable\"\nconst clock = \"24h\"\nconst contextWarning = 0.8\n",
+		}}, at("config.go", 3)), 150 * time.Millisecond},
+		{tool("test", "go test ./internal/tui/...", acp.ToolKindExecute, acp.ToolCallStatusInProgress, nil), 1500 * time.Millisecond},
+		{&acp.ToolCallUpdate{ToolCallID: acp.ToolCallID(prefix + "test"), Status: acp.OptValue(acp.ToolCallStatusCompleted), Content: acp.OptValue(text(testOutput.String()))}, 150 * time.Millisecond},
+		{tool("vet", "go vet ./internal/demo", acp.ToolKindExecute, acp.ToolCallStatusFailed, text("internal/demo/demo.go:12:2: unreachable code\nexit status 1")), 200 * time.Millisecond},
+	}
+	for index, step := range steps {
+		if err := emit(step.update); err != nil || !pause(step.wait) {
+			return false
+		}
+		if index == 1 {
+			// Report usage mid-turn so the header's context meter is visible
+			// (and already amber) while tools are still running.
+			_ = emit(&acp.UsageUpdate{Used: 164800, Size: 200000})
+		}
+	}
+	return true
 }

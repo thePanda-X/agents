@@ -91,7 +91,7 @@ func TestCompactGroupsDiffPreviewsUnlessExpandedAndPositionsStayAccurate(t *test
 			if positions[0] == positions[1] || !strings.Contains(lines[positions[1]], "Write") {
 				t.Fatal("expanded write was hidden")
 			}
-		} else if positions[0] != positions[1] || !strings.Contains(lines[positions[1]], "2 successful tools") {
+		} else if positions[0] != positions[1] || !strings.Contains(lines[positions[1]], "2 tools") {
 			t.Fatal("completed write preview did not join the tool group")
 		}
 	}

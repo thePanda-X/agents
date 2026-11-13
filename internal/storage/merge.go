@@ -16,6 +16,7 @@ func mergeSettings(current, before, after Settings) Settings {
 	mergeValue(&current.Compact, before.Compact, after.Compact)
 	mergeValue(&current.Appearance, before.Appearance, after.Appearance)
 	mergeValue(&current.ReducedMotion, before.ReducedMotion, after.ReducedMotion)
+	mergeValue(&current.Clock24, before.Clock24, after.Clock24)
 	mergeValue(&current.Agents, before.Agents, after.Agents)
 	mergeValue(&current.MCP, before.MCP, after.MCP)
 	current.Keybindings = mergeMap(current.Keybindings, before.Keybindings, after.Keybindings)

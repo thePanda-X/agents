@@ -24,7 +24,7 @@ func TestCompactComposeGroupsFileToolsAndBrowseRestoresThem(t *testing.T) {
 		content, positions := New().Render(c, Options{Width: 60, Compact: true, Focused: focused})
 		lines := strings.Split(ansi.Strip(content), "\n")
 		if !focused {
-			if !strings.Contains(lines[positions[0]], "4 successful tools") {
+			if !strings.Contains(lines[positions[0]], "4 tools") {
 				t.Fatal("file tools did not join the mixed successful group")
 			}
 			for _, position := range positions[:4] {
@@ -66,7 +66,7 @@ func TestCompactComposeGroupsThinkingAndToolsButBrowseRestoresEntries(t *testing
 				}
 			}
 		} else {
-			if !strings.Contains(lines[positions[1]], "2 successful tools · 2 thinking blocks") {
+			if !strings.Contains(lines[positions[1]], "2 tools · 2 thoughts") {
 				t.Fatal("mixed group has incorrect counts")
 			}
 			for _, position := range positions[1:5] {

@@ -40,7 +40,7 @@ func TestReducedMotionKeepsRunningToolStatusWithoutAnimation(t *testing.T) {
 	r := New()
 	first, _ := r.Render(c, Options{Width: 80, ReducedMotion: true, SpinnerFrame: 1})
 	second, _ := r.Render(c, Options{Width: 80, ReducedMotion: true, SpinnerFrame: 7})
-	if first != second || !strings.Contains(ansi.Strip(first), "in_progress") {
+	if first != second || !strings.Contains(ansi.Strip(first), "running") {
 		t.Fatal("reduced motion changed frames or hid running tool status")
 	}
 }

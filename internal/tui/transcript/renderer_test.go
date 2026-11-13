@@ -50,15 +50,15 @@ func TestFocusGutterKeepsLayoutStableAndSearchPreservesText(t *testing.T) {
 
 func TestCompactToolGroupsExpandForBrowseAndKeepFailuresAndSingletonsVisible(t *testing.T) {
 	c := &app.Conversation{Entries: []*app.Entry{
-		{ID: "a", Tool: &app.ToolState{Title: "Read first", Status: "completed"}},
-		{ID: "b", Tool: &app.ToolState{Title: "Read second", Status: "completed"}},
+		{ID: "a", Tool: &app.ToolState{Title: "Read first", Kind: "read", Status: "completed"}},
+		{ID: "b", Tool: &app.ToolState{Title: "Read second", Kind: "read", Status: "completed"}},
 		{ID: "c", Tool: &app.ToolState{Title: "Failed command", Status: "failed"}},
 		{ID: "d", Tool: &app.ToolState{Title: "Reported edit", Status: "completed", Diffs: []harness.Diff{{Path: "file.go"}}}},
 	}}
 	r := New()
 	compact, positions := r.Render(c, Options{Width: 80, Compact: true})
 	plain := ansi.Strip(compact)
-	if !strings.Contains(plain, "2 successful tools") || strings.Contains(plain, "Read second") || !strings.Contains(plain, "Failed command") || !strings.Contains(plain, "Reported edit") || positions[0] != positions[1] {
+	if !strings.Contains(plain, "Read 2 files") || strings.Contains(plain, "Read second") || !strings.Contains(plain, "Failed command") || !strings.Contains(plain, "Reported edit") || positions[0] != positions[1] {
 		t.Fatal("incorrect compact tool grouping")
 	}
 	browse, positions := r.Render(c, Options{Width: 80, Compact: true, Focused: true})
@@ -124,8 +124,8 @@ func TestCompactSeparatesActivityFromResponsesWithoutSpacingActivityRows(t *test
 		c := &app.Conversation{Entries: []*app.Entry{
 			{Role: "assistant", Text: "INTRO"},
 			{ID: "thought", Role: "thought", Text: "Reasoning"},
-			{ID: "a", Tool: &app.ToolState{Title: "Read first", Status: "completed"}},
-			{ID: "b", Tool: &app.ToolState{Title: "Read second", Status: "completed"}},
+			{ID: "a", Tool: &app.ToolState{Title: "Read first", Kind: "read", Status: "completed"}},
+			{ID: "b", Tool: &app.ToolState{Title: "Read second", Kind: "read", Status: "completed"}},
 			{Role: "assistant", Text: "FINAL"},
 		}}
 		content, positions := New().Render(c, Options{Width: 60, Compact: true, Focused: focused})
@@ -198,8 +198,8 @@ func TestUserMessagesHaveBlankBoundariesAndAccuratePositions(t *testing.T) {
 func TestCompactUserBoundariesPreserveToolGrouping(t *testing.T) {
 	c := &app.Conversation{Entries: []*app.Entry{
 		{Role: "user", Text: "FIRST PROMPT"},
-		{Tool: &app.ToolState{Title: "Read first", Status: "completed"}},
-		{Tool: &app.ToolState{Title: "Read second", Status: "completed"}},
+		{Tool: &app.ToolState{Title: "Read first", Kind: "read", Status: "completed"}},
+		{Tool: &app.ToolState{Title: "Read second", Kind: "read", Status: "completed"}},
 		{Role: "user", Text: "NEXT PROMPT"},
 	}}
 	content, positions := New().Render(c, Options{Width: 60, Compact: true})
@@ -212,7 +212,7 @@ func TestCompactUserBoundariesPreserveToolGrouping(t *testing.T) {
 			t.Fatal("missing blank boundary around grouped tools")
 		}
 	}
-	if !strings.Contains(lines[positions[1]], "2 successful tools") || !strings.Contains(lines[positions[3]], "NEXT PROMPT") {
+	if !strings.Contains(lines[positions[1]], "Read 2 files") || !strings.Contains(lines[positions[3]], "NEXT PROMPT") {
 		t.Fatal("grouped tool or user navigation position is incorrect")
 	}
 }

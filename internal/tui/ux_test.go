@@ -291,6 +291,8 @@ func TestQuitRemapAndGeneratedHints(t *testing.T) {
 	if !strings.Contains(m.infoContent, "Alt+Q") || !strings.Contains(m.infoContent, "Alt+P") {
 		t.Fatal("help ignores remap")
 	}
+	// Open dialogs describe their own keys; composer hints return on close.
+	m.closeOverlay()
 	if !strings.Contains(ansi.Strip(m.footer(100)), "Alt+P") {
 		t.Fatal("footer ignores remap")
 	}

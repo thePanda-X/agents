@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (m *Model) View() tea.View {
 		panel := style.Render(m.modalContent(panelWidth, panelHeight))
 		canvas := lipgloss.NewCanvas(m.width, m.height)
 		// Layer.Draw does not apply Layer.X/Y. The compositor resolves offsets.
-		canvas.Compose(lipgloss.NewCompositor(lipgloss.NewLayer(base), lipgloss.NewLayer(panel).X(max(0, (m.width-lipgloss.Width(panel))/2)).Y(max(0, (m.height-lipgloss.Height(panel))/2)).Z(1)))
+		canvas.Compose(lipgloss.NewCompositor(lipgloss.NewLayer(m.dimmed(base)), lipgloss.NewLayer(panel).X(max(0, (m.width-lipgloss.Width(panel))/2)).Y(max(0, (m.height-lipgloss.Height(panel))/2)).Z(1)))
 		base = canvas.Render()
 	}
 	v := tea.NewView(base)
@@ -61,6 +62,22 @@ func (m *Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
+}
+
+// dimmed recedes the interface behind a dialog. Text fragments left visible
+// beside a centered panel otherwise read as rendering artifacts, and a uniform
+// low-contrast layer keeps attention on the dialog. Terminal default
+// appearance has no application colors, so it uses the faint attribute.
+func (m *Model) dimmed(content string) string {
+	style := lipgloss.NewStyle().Foreground(theme.Border).Background(theme.Background)
+	if m.opts.Settings.Appearance == "terminal" {
+		style = lipgloss.NewStyle().Faint(true)
+	}
+	lines := strings.Split(ansi.Strip(content), "\n")
+	for i, line := range lines {
+		lines[i] = style.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // setTerminalDefaultColors controls whether the view changes the terminal's
@@ -128,7 +145,7 @@ func (m *Model) header(width int) string {
 	}
 	right := theme.Accent.Render(m.opts.Descriptor.Name)
 	if c := m.state.Active(); c != nil && c.Usage != nil {
-		right += theme.Quiet.Render(fmt.Sprintf("  %s / %s", tokens(c.Usage.Used), tokens(c.Usage.Size)))
+		right += "  " + contextUsage(c.Usage.Used, c.Usage.Size)
 		if c.Usage.Cost != nil {
 			right += theme.Quiet.Render(fmt.Sprintf(" · %.3f %s", c.Usage.Cost.Amount, c.Usage.Cost.Currency))
 		}
@@ -136,12 +153,35 @@ func (m *Model) header(width int) string {
 	return theme.Line(left, right, width)
 }
 
+// contextUsage labels the reported context window and its fill percentage.
+// The percentage turns amber above 80% and red above 95% so an approaching
+// limit is visible without opening any dialog.
+func contextUsage(used, size uint64) string {
+	if size == 0 {
+		return theme.Quiet.Render("ctx " + tokens(used))
+	}
+	percent := min(100, int(used*100/size))
+	style := theme.Quiet
+	switch {
+	case percent >= 95:
+		style = theme.Error
+	case percent >= 80:
+		style = theme.Warning
+	}
+	return theme.Quiet.Render("ctx "+tokens(used)+"/"+tokens(size)+" ") + style.Render(fmt.Sprintf("%d%%", percent))
+}
+
+// tokens formats a token count compactly, omitting a trailing ".0" so round
+// window sizes read as "200k" rather than "200.0k".
 func tokens(n uint64) string {
+	format := func(value float64, unit string) string {
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", value), ".0") + unit
+	}
 	if n >= 1000000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+		return format(float64(n)/1000000, "M")
 	}
 	if n >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
+		return format(float64(n)/1000, "k")
 	}
 	return fmt.Sprint(n)
 }
@@ -169,7 +209,7 @@ func (m *Model) conversationView() string {
 	if m.state.Connection == "ready" {
 		status = "Type a task and press Enter to start."
 		if m.state.Active() == nil {
-			status = "Type a task and press Enter. /model prepares a session before your first task."
+			status = "Start typing, or pick a model first with /model."
 		}
 	}
 	if m.state.Connection == "disconnected" {
@@ -192,14 +232,15 @@ func (m *Model) conversationView() string {
 	if m.viewport.Height() < 5 {
 		return lipgloss.NewStyle().Width(m.viewport.Width()).Height(m.viewport.Height()).MaxHeight(m.viewport.Height()).Render(theme.Quiet.Render(guidance))
 	}
+	text := "\n\n" + theme.Body.Render(lipgloss.Wrap(status, m.viewport.Width(), " ")) + "\n\n" + theme.Quiet.Render(lipgloss.Wrap(guidance, m.viewport.Width(), " "))
 	intro := theme.Heading.Render("agents")
 	// The ASCII wordmark belongs to the fresh-session landing screen: show it
-	// only when the harness is ready and the viewport can hold it without
-	// clipping. Smaller or transient states keep the compact heading.
-	if banner, ok := renderBanner(m.viewport.Width()); ok && m.state.Connection == "ready" && m.viewport.Height() >= 12 {
+	// only when the harness is ready and the wordmark plus the status and
+	// guidance below it fit without clipping. Guidance always wins over art.
+	if banner, ok := renderBanner(m.viewport.Width()); ok && m.state.Connection == "ready" && bannerHeight()+lipgloss.Height(text)-1 <= m.viewport.Height() {
 		intro = banner
 	}
-	intro += "\n\n" + theme.Body.Render(lipgloss.Wrap(status, m.viewport.Width(), " ")) + "\n\n" + theme.Quiet.Render(lipgloss.Wrap(guidance, m.viewport.Width(), " "))
+	intro += text
 	return lipgloss.NewStyle().Width(m.viewport.Width()).Height(m.viewport.Height()).MaxHeight(m.viewport.Height()).Align(lipgloss.Center, lipgloss.Center).Render(intro)
 }
 
@@ -281,13 +322,17 @@ func (m *Model) composer(width int) string {
 
 // composerMeta labels the composer's bottom border with the advertised model,
 // effort, and mode. Values are kept instead of option names so the frame stays
-// compact, mirroring how agent TUIs summarize the active configuration.
+// compact, mirroring how agent TUIs summarize the active configuration. The
+// returned label is styled for the composer surface; a mode that lets the agent
+// act without asking is shown in the warning color.
 func (m *Model) composerMeta() string {
 	c := m.state.Active()
 	if c == nil {
 		return ""
 	}
+	quiet, warning := theme.Quiet.Background(theme.Surface), theme.Warning.Background(theme.Surface)
 	var models, effort, modes []string
+	permissive := false
 	for _, option := range c.Options {
 		value := fmt.Sprint(option.Value)
 		for _, choice := range option.Choices {
@@ -307,6 +352,9 @@ func (m *Model) composerMeta() string {
 			effort = append(effort, value)
 		case "mode":
 			modes = append(modes, value)
+			if m.permissiveMode(fmt.Sprint(option.Value), value) {
+				permissive = true
+			}
 		}
 	}
 	label := strings.Join(models, " · ")
@@ -317,33 +365,57 @@ func (m *Model) composerMeta() string {
 			label += " (" + value + ")"
 		}
 	}
+	styled := quiet.Render(label)
 	if value := strings.Join(modes, " · "); value != "" {
 		if label != "" {
-			label += " · "
+			styled += quiet.Render(" · ")
 		}
-		label += value
+		if permissive {
+			styled += warning.Render("⚠ " + value)
+		} else {
+			styled += quiet.Render(value)
+		}
 	}
-	return label
+	if ansi.Strip(styled) == "" {
+		return ""
+	}
+	return styled
+}
+
+// permissiveMode reports whether a mode lets the agent act without asking:
+// either declared by the harness descriptor, or (for custom agents) named in a
+// way that unambiguously says so.
+func (m *Model) permissiveMode(id, name string) bool {
+	if slices.Contains(m.opts.Descriptor.PermissiveModes, id) {
+		return true
+	}
+	text := strings.ToLower(id + " " + name)
+	for _, word := range []string{"bypass", "yolo", "dangerous", "full-access", "full access"} {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
 }
 
 // composerBottom draws the frame's bottom edge with an optional right-aligned
-// label. Lipgloss borders cannot contain text, so the line is composed here and
-// measured in cells to keep the composer exactly width columns wide.
+// label already styled for the composer surface. Lipgloss borders cannot
+// contain text, so the line is composed here and measured in cells to keep the
+// composer exactly width columns wide.
 func composerBottom(width int, label string, color color.Color) string {
 	border := lipgloss.RoundedBorder()
 	inner := max(0, width-2)
 	lineStyle := lipgloss.NewStyle().Foreground(color).Background(theme.Surface)
-	labelStyle := theme.Quiet.Background(theme.Surface)
+	pad := theme.Quiet.Background(theme.Surface).Render(" ")
 	text := ""
 	if label != "" && width >= 40 {
-		text = ansi.Truncate(" "+label+" ", max(0, inner-1), "…")
+		text = ansi.Truncate(pad+label+pad, max(0, inner-1), "…")
 	}
 	if text == "" {
 		return lineStyle.Render(border.BottomLeft + strings.Repeat(border.Bottom, inner) + border.BottomRight)
 	}
 	fill := max(0, inner-lipgloss.Width(text))
-	return lineStyle.Render(border.BottomLeft+strings.Repeat(border.Bottom, fill)) +
-		labelStyle.Render(text) + lineStyle.Render(border.BottomRight)
+	return lineStyle.Render(border.BottomLeft+strings.Repeat(border.Bottom, fill)) + text + lineStyle.Render(border.BottomRight)
 }
 
 func (m *Model) footer(width int) string {
@@ -367,29 +439,36 @@ func (m *Model) footer(width int) string {
 			hints = []string{"j/k:scroll", "i:compose"}
 		}
 	}
-	if m.list != nil {
-		mode = "PICKER"
-		if m.overlay == "search" {
-			mode = "SEARCH"
-		}
-	}
-	left := theme.Accent.Bold(true).Render(mode)
-	if m.focusedTranscript {
-		if c := m.state.Active(); c != nil && len(c.Entries) > 0 {
-			left += theme.Quiet.Render(fmt.Sprintf(" %d/%d", m.selected+1, len(c.Entries)))
-		}
-	}
-	if m.opts.Settings.Compact {
-		hints = []string{m.binding("palette") + ":commands"}
-		if m.focusedTranscript {
-			hints = []string{"?:help"}
-		}
-	}
 	if width < 40 {
 		hints = []string{enter, "Tab"}
 		if m.focusedTranscript {
 			hints = []string{"j/k:scroll", "i:compose"}
 		}
+	}
+	// Dialogs own the keyboard: describe their keys rather than the composer's.
+	overlayOpen := true
+	switch {
+	case m.interaction != nil:
+		mode, hints = "ANSWER", []string{"Enter:confirm", "Ctrl+C:cancel"}
+	case m.form != nil:
+		mode, hints = "FORM", []string{"Enter:save", "Esc:cancel"}
+	case m.list != nil && m.overlay == "search":
+		mode, hints = "SEARCH", []string{"Enter:jump", "Esc:close"}
+	case m.list != nil:
+		mode, hints = "PICKER", []string{"↑↓:select", "Enter:choose", "Esc:close"}
+	case m.overlay == "info":
+		mode, hints = "VIEW", []string{"j/k:scroll", "Esc:close"}
+	default:
+		overlayOpen = false
+	}
+	left := theme.Accent.Bold(true).Render(mode)
+	if m.focusedTranscript && !overlayOpen {
+		if c := m.state.Active(); c != nil && len(c.Entries) > 0 {
+			left += theme.Quiet.Render(fmt.Sprintf(" %d/%d", m.selected+1, len(c.Entries)))
+		}
+	}
+	if overlayOpen {
+		return footerLine(left, hints, width)
 	}
 	buffer := m.drafts[m.draftKey()]
 	if buffer != nil && len(buffer.Pastes) > 0 && !m.focusedTranscript && m.overlay == "" && m.list == nil && m.interaction == nil {

@@ -21,7 +21,9 @@ parent Git repository root. No `--cwd` argument is required.
 
 The header shows the workspace as `<dir>:<branch>` when a Git branch is available
 and refreshes it automatically. Outside Git repositories or with a detached
-HEAD, it shows just the directory. When the harness reports subscription usage,
+HEAD, it shows just the directory. When the harness reports context usage, the
+header shows a labeled meter such as `ctx 48.2k/200k 24%`; the percentage turns
+amber at 80% and red at 95%. When the harness reports subscription usage,
 the line above the composer shows one compact meter at a time, such as
 `5h ━━━━━━──── 58% ↻ 2h 10m`, alternating windows every 15 seconds; `/limits`
 opens the reset times and status for every window.
@@ -258,12 +260,17 @@ prompt all re-pin the view, and streaming resumes following. Plans, reported
 changes, settings, authentication, and harness selection are available through
 the command palette.
 
-Dialogs are centered over the conversation. Short or narrow terminals use tighter
+Dialogs are centered over the conversation, which is dimmed behind them, and the
+footer lists the open dialog's keys rather than the composer's. Short or narrow terminals use tighter
 padding and reserve space for the selected action and close/cancel instructions.
 The statusline keeps connection and turn state visible; short-lived notifications
 appear separately above it. A running turn reads `Responding… 12s` with the stop
 shortcut on the right. The composer's bottom border labels the advertised model,
-effort, and mode, and the footer lists `Key:action` shortcuts separated by `│`.
+effort, and mode, and the footer lists `Key:action` shortcuts separated by `│`
+in both layouts. A mode that lets the agent edit files and run commands without
+asking (Claude Code's `bypassPermissions`, or a custom agent mode named like
+"bypass" or "yolo") is shown in amber with `⚠`; this is a reminder only and
+never changes the selected mode.
 `/diagnostics` opens full error details and agent setup
 instructions. Failed file, skill, and session pickers offer Enter to retry.
 
@@ -308,7 +315,9 @@ Esc returns from a detail pager or option selector to its parent picker.
 
 Model and option selectors focus and mark the current value. Confirming that
 value leaves it unchanged. Settings remain open after toggles and retain the
-filter and selection. The command palette groups related actions and explains
+filter and selection. The command palette lists your recent actions first,
+shows each action's shortcut (or its slash command when it has none) with a
+preview explaining it, groups related actions under headings, and explains
 unavailable actions instead of silently ignoring them.
 
 Enable **Compact layout** in `/settings` (or `"compact": true`) to reduce message
@@ -335,6 +344,9 @@ to the available terminal width, reserving only the transcript gutter and messag
 padding. Prose, code, and tables use the same width budget, including in mixed
 responses and after resizing.
 Compact mode keeps one blank line between tool/thinking runs and model responses.
+In both layouts, consecutive tool calls and thinking blocks sit on adjacent rows
+so a long agent turn stays readable; comfortable layout keeps blank rows around
+prompts and responses.
 
 Ctrl+C dismisses an overlay or cancels an interaction before stopping a running
 turn. When idle it clears the draft; `/restore` recovers the last cleared draft.
@@ -361,11 +373,13 @@ reverse-video cursor cues, and textual selection markers. **Reduced motion**
 replaces activity animations with static indicators. These can also be set using
 `"appearance": "high-contrast"` (or `"terminal"`) and `"reducedMotion": true` in
 `settings.json`; omitted preferences keep the original Graphite appearance.
+**24-hour message times** shows sent-message times as `15:04` instead of
+`3:04 PM` (`"clock24": true`).
 Transcript search highlights the active occurrence; n/N visits occurrences within
 an entry before advancing to the next/previous matching entry.
 
 Markdown tables use bold headers, padded columns, and horizontal rules between
-data rows. Padding tightens on narrow terminals while long cells still wrap;
+data rows. Tables are only as wide as their content needs. Padding tightens on narrow terminals while long cells still wrap;
 rules separate logical rows, not individual wrapped lines. Content that cannot
 wrap at word boundaries — long URLs, wide code lines, base64, and diff lines —
 is hard-broken at the transcript width rather than left to overflow, so the
@@ -457,18 +471,30 @@ the file changed. No workspace files are read to guess a tool's earlier state.
 Completed patch/read/write calls and thinking blocks join other successful tool
 calls in compact compose mode, including tools with diff previews. Browse mode
 restores each entry individually; explicitly expanded entries remain visible in
-either mode. Group labels show both tool and thinking-block counts.
+either mode. Group labels summarize what the agent did by tool kind, such as
+`Read 3 files · 1 edit · ran 2 commands · 2 thoughts`.
 Pending and running tools show an animated spinner in place of the fold arrow,
 including when expanded. Finished tools return to their expand/collapse arrows.
+The right side of a tool row reads `pending`, `running`, or `failed`; completed
+edits with structured diffs show their line counts, such as `+12 −3`, and other
+completed tools stay quiet. Diff file headers are not colored as changes.
+Expanded tools show the first 30 lines of each output section with a count of
+the hidden lines; `o` in browse mode (and transcript search) shows everything.
 Thinking blocks display only reasoning text actually supplied by the harness. When
 the next entry's timestamp is available, the collapsed label shows how long
-reasoning took, such as `◇ Thought · 2.0s`; replayed sessions keep the
-timestamp-free `◇ Thinking` label.
+reasoning took, such as `▸ Thought · 2.0s`; replayed sessions keep the
+timestamp-free `▸ Thinking` label. Thinking uses the same `▸`/`▾` fold arrows
+as tools.
 Empty chunks are labelled "no text supplied by agent" rather than expanding to
 blank content; the client cannot recover reasoning a provider does not expose.
 
-The demo's `/permission`, `/question`, and `/slow` commands exercise approvals,
-forms, and cancellation through the real ACP adapter.
+The demo's automatic first turn is a simulated tour: it streams thinking, reads,
+a search, an edit with a diff, a long-running command with long output, and a
+failed command, then reports near-full context usage. Its reply lists what to
+try. The demo also offers a simulated **Bypass permissions** mode (Shift+Tab) to
+show the permissive-mode warning; it never edits files or runs commands. Its
+`/permission`, `/question`, and `/slow` commands exercise approvals, forms, and
+cancellation through the real ACP adapter.
 
 ## Slash commands
 

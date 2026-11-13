@@ -10,6 +10,10 @@ type Descriptor struct {
 	Launch                Launch
 	LoginHint             string
 	Factory               Factory
+	// PermissiveModes lists advertised mode IDs that let the agent edit files
+	// and run commands without asking. The UI highlights them as a reminder; it
+	// never selects or blocks a mode based on this list.
+	PermissiveModes []string
 }
 
 // Registry is assembled at startup and then treated as immutable.

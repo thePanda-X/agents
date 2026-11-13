@@ -2,7 +2,9 @@ package acpclient_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,63 @@ func TestACPRoundTripConfigurationAndReplay(t *testing.T) {
 	}
 	if err := client.DeleteSession(ctx, session.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The demo turn is the offline walkthrough of the interface: it must keep
+// exercising every tool kind and state the transcript renders distinctly.
+func TestDemoTurnShowcasesToolStatesKindsAndUsage(t *testing.T) {
+	events := make(chan harness.Event, 1024)
+	client := demoClient(t, func(e harness.Event) { events <- e })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := client.NewSession(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason, err := client.Prompt(ctx, session.ID, harness.Prompt{Text: "show the interface"}); err != nil || reason != "end_turn" {
+		t.Fatalf("prompt: %s, %v", reason, err)
+	}
+	kinds, statuses := map[string]bool{}, map[string]bool{}
+	var diff, longOutput bool
+	var usage uint64
+	for len(events) > 0 {
+		e := <-events
+		switch e.Kind {
+		case harness.Tool:
+			if e.Tool.Kind != nil {
+				kinds[*e.Tool.Kind] = true
+			}
+			if e.Tool.Status != nil {
+				statuses[*e.Tool.Status] = true
+			}
+			diff = diff || e.Tool.Diffs != nil && len(*e.Tool.Diffs) > 0
+			longOutput = longOutput || e.Tool.Text != nil && strings.Count(*e.Tool.Text, "\n") > 40
+		case harness.UsageChanged:
+			usage = e.Usage.Used * 100 / e.Usage.Size
+		}
+	}
+	for _, kind := range []string{"read", "search", "edit", "execute"} {
+		if !kinds[kind] {
+			t.Errorf("demo lacks a %s tool", kind)
+		}
+	}
+	for _, status := range []string{"in_progress", "completed", "failed"} {
+		if !statuses[status] {
+			t.Errorf("demo lacks a %s tool", status)
+		}
+	}
+	if !diff || !longOutput || usage < 80 {
+		t.Fatalf("demo lacks diff=%v long output=%v or near-full context (%d%%)", diff, longOutput, usage)
+	}
+	var bypass bool
+	for _, option := range session.Options {
+		for _, choice := range option.Choices {
+			bypass = bypass || option.Category == "mode" && slices.Contains(demo.Descriptor().PermissiveModes, fmt.Sprint(choice.Value))
+		}
+	}
+	if !bypass {
+		t.Fatal("demo does not advertise a permissive mode")
 	}
 }
 
