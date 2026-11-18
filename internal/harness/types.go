@@ -53,7 +53,16 @@ type Options struct {
 	// agent-specific metadata. Adapters pass the raw metadata object when one is
 	// present. Implementations must ignore unknown keys and malformed values.
 	DecodeUsageLimits func(json.RawMessage) []UsageLimit
-	Diagnostics       io.Writer
+	// ClientMeta is merged into the _meta object of the client's initialize
+	// capabilities. It lets a harness registration opt into a verified native
+	// extension without teaching the shared adapter its keys.
+	ClientMeta map[string]any
+	// DecodeParent optionally extracts, from agent-specific update metadata,
+	// the ID of the tool call (such as a subagent launch) that produced a
+	// message chunk or tool call. It returns "" when the update is top level.
+	// Implementations must ignore unknown keys and malformed values.
+	DecodeParent func(json.RawMessage) string
+	Diagnostics  io.Writer
 }
 
 type SessionInfo struct {
@@ -108,6 +117,9 @@ type Command struct {
 
 type MessageChunk struct {
 	ID, Role, Text string
+	// ParentID names the tool call whose subagent produced this chunk, or ""
+	// for the session's own agent.
+	ParentID string
 }
 
 type Diff struct {
@@ -116,7 +128,10 @@ type Diff struct {
 
 // ToolPatch represents a partial update. Nil means unchanged, not empty.
 type ToolPatch struct {
-	ID                  string
+	ID string
+	// ParentID names the tool call whose subagent made this call, or "" for
+	// the session's own agent. It only places a call when it first appears.
+	ParentID            string
 	Title, Kind, Status *string
 	Text                *string
 	Diffs               *[]Diff

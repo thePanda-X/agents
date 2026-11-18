@@ -29,10 +29,10 @@ func TestUsageUpdatePassesMetadataToOptionalDecoder(t *testing.T) {
 			Size: 100,
 			Meta: acp.OptValue(meta),
 		},
-	}, func(raw json.RawMessage) []harness.UsageLimit {
+	}, decoders{usageLimits: func(raw json.RawMessage) []harness.UsageLimit {
 		decoded = raw
 		return []harness.UsageLimit{{Kind: "five_hour", Label: "5h", Utilization: 0.5}}
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,11 @@ func TestClientSessionUpdateUsesConfiguredUsageDecoder(t *testing.T) {
 		}},
 		sink: func(event harness.Event) { got = event },
 	}
-	client.clientConfig().SessionUpdate(context.Background(), &acp.SessionNotification{
+	config, err := client.clientConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.SessionUpdate(context.Background(), &acp.SessionNotification{
 		SessionID: "s",
 		Update:    &acp.UsageUpdate{Used: 1, Size: 2, Meta: acp.OptValue(meta)},
 	})
@@ -73,10 +77,10 @@ func TestUsageUpdateWithoutMetadataDoesNotCallDecoder(t *testing.T) {
 	event, err := normalizeUpdate(&acp.SessionNotification{
 		SessionID: "s",
 		Update:    &acp.UsageUpdate{Used: 10, Size: 100},
-	}, func(json.RawMessage) []harness.UsageLimit {
+	}, decoders{usageLimits: func(json.RawMessage) []harness.UsageLimit {
 		called = true
 		return nil
-	})
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}

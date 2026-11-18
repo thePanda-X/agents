@@ -27,7 +27,7 @@ func TestOpenCodeStyleThoughtChunksSurviveDecodeAndReduction(t *testing.T) {
 		if err := json.Unmarshal(data, &notification); err != nil {
 			t.Fatal(err)
 		}
-		event, err := normalizeUpdate(&notification, nil)
+		event, err := normalizeUpdate(&notification, decoders{})
 		if err != nil {
 			t.Fatal(err)
 		}

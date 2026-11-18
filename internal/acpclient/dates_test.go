@@ -20,7 +20,7 @@ func TestNormalizeSessionDateUpdatesPreservePartialAndNullFields(t *testing.T) {
 		{name: "cleared", date: acp.OptNull[string](), want: new("")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			e, err := normalizeUpdate(&acp.SessionNotification{SessionID: "s", Update: &acp.SessionInfoUpdate{UpdatedAt: test.date}}, nil)
+			e, err := normalizeUpdate(&acp.SessionNotification{SessionID: "s", Update: &acp.SessionInfoUpdate{UpdatedAt: test.date}}, decoders{})
 			if err != nil || e.Kind != harness.Metadata || e.Metadata.Title != nil {
 				t.Fatalf("bad metadata update: %+v, %v", e, err)
 			}

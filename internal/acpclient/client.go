@@ -58,7 +58,11 @@ func Connect(ctx context.Context, transport acp.Transport, options harness.Optio
 	c.terminals = clientservices.NewTerminals(c.files, func(sessionID, id, output string) {
 		sink(harness.Event{Kind: harness.TerminalOutput, SessionID: sessionID, ID: id, Text: output})
 	})
-	config := c.clientConfig()
+	config, err := c.clientConfig()
+	if err != nil {
+		c.files.Close()
+		return nil, err
+	}
 	client, err := acp.NewClient(config)
 	if err != nil {
 		c.files.Close()

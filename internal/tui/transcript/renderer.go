@@ -47,7 +47,7 @@ func New() *Renderer {
 // sections. Raw entry text remains authoritative for clipboard/editor exports.
 func (r *Renderer) Detail(entry *app.Entry, width int, terminals map[string]string) string {
 	if entry.Tool != nil {
-		return r.tool(entry.Tool, true, terminals, max(10, width), 0, true)
+		return r.tool(entry, true, terminals, max(10, width), 0, true)
 	}
 	text := theme.Clean(entry.Text)
 	if entry.Role == "thought" && strings.TrimSpace(text) == "" {
@@ -150,7 +150,7 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 			}
 			// While searching, show complete output so a match beyond the cap
 			// is visible and highlighted where the search reveals it.
-			block = r.tool(entry.Tool, options.Expanded[entry.ID], options.Terminals, width-2, frame, search != nil)
+			block = r.tool(entry, options.Expanded[entry.ID], options.Terminals, width-2, frame, search != nil)
 		} else if entry.Role == "thought" {
 			// Thinking folds use the same ▸/▾ arrows as tools, so the open/closed
 			// state reads identically across every foldable entry.
@@ -216,9 +216,12 @@ func activitySummary(entries []*app.Entry) string {
 		kind := "thought"
 		if entry.Tool != nil {
 			kind = entry.Tool.Kind
+			if len(entry.Children) > 0 {
+				kind = "agent"
+			}
 		}
 		switch kind {
-		case "read", "edit", "execute", "search", "fetch", "thought":
+		case "read", "edit", "execute", "search", "fetch", "thought", "agent":
 		case "think":
 			kind = "thought"
 		case "delete", "move":
@@ -235,13 +238,15 @@ func activitySummary(entries []*app.Entry) string {
 		return many
 	}
 	var parts []string
-	for _, kind := range []string{"read", "search", "edit", "file", "execute", "fetch", "other", "thought"} {
+	for _, kind := range []string{"agent", "read", "search", "edit", "file", "execute", "fetch", "other", "thought"} {
 		n := counts[kind]
 		if n == 0 {
 			continue
 		}
 		var part string
 		switch kind {
+		case "agent":
+			part = fmt.Sprintf("%d %s", n, plural(n, "subagent", "subagents"))
 		case "read":
 			part = fmt.Sprintf("read %d %s", n, plural(n, "file", "files"))
 		case "search":
@@ -463,7 +468,18 @@ var toolSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦"
 // detail pager (o) and exports always show the complete text.
 const toolOutputLimit = 30
 
-func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]string, width, spinnerFrame int, full bool) string {
+// subagentTail bounds the subagent steps an expanded launch shows inline. The
+// most recent steps are kept so a running subagent can be followed; the detail
+// pager (o) shows all of them.
+const subagentTail = 8
+
+// subagentMessageLimit bounds each subagent message shown inline.
+const subagentMessageLimit = 6
+
+func active(t *app.ToolState) bool { return t.Status == "pending" || t.Status == "in_progress" }
+
+func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]string, width, spinnerFrame int, full bool) string {
+	t := entry.Tool
 	icon, statusStyle := "▸", theme.Quiet
 	if expanded {
 		icon = "▾"
@@ -486,8 +502,28 @@ func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]st
 			status = theme.Quiet.Render("pending")
 		}
 	}
+	steps := 0
+	for _, child := range entry.Children {
+		if child.Tool != nil {
+			steps++
+		}
+	}
+	if steps > 0 {
+		label := fmt.Sprintf("%d %s", steps, map[bool]string{true: "step", false: "steps"}[steps == 1])
+		if ansi.Strip(status) == "" {
+			status = theme.Quiet.Render(label)
+		} else {
+			status += theme.Quiet.Render(" · " + label)
+		}
+	}
 	heading := theme.Line(statusStyle.Render(icon+" "+theme.Clean(t.Title)), status, width)
 	if !expanded {
+		// A collapsed running subagent shows what it is doing right now.
+		if active(t) && len(entry.Children) > 0 {
+			if latest := latestStep(entry.Children); latest != "" {
+				heading += "\n" + ansi.Truncate(theme.Quiet.Render("  ⎿ "+latest), width, "…")
+			}
+		}
 		return heading
 	}
 	section := func(text string) string {
@@ -502,6 +538,9 @@ func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]st
 	}
 	if len(t.Input) > 0 {
 		parts = append(parts, theme.Quiet.Render("Input"), section(pretty(t.Input)))
+	}
+	if len(entry.Children) > 0 {
+		parts = append(parts, r.subagent(entry.Children, terminals, width, spinnerFrame, full))
 	}
 	if t.Text != "" {
 		parts = append(parts, section(theme.Clean(t.Text)))
@@ -519,6 +558,73 @@ func (r *Renderer) tool(t *app.ToolState, expanded bool, terminals map[string]st
 		parts = append(parts, theme.Quiet.Render("Output"), section(pretty(t.Output)))
 	}
 	return NormalizeWidth(lipgloss.Wrap(strings.Join(parts, "\n"), width, " "), width)
+}
+
+// latestStep summarizes a subagent's most recent visible step on one line.
+func latestStep(children []*app.Entry) string {
+	for i := len(children) - 1; i >= 0; i-- {
+		child := children[i]
+		switch {
+		case child.Tool != nil:
+			return theme.Clean(child.Tool.Title)
+		case child.Role == "thought":
+			return "Thinking"
+		case child.Role == "assistant":
+			lines := strings.Split(strings.TrimSpace(theme.Clean(child.Text)), "\n")
+			if last := strings.TrimSpace(lines[len(lines)-1]); last != "" {
+				return last
+			}
+		}
+	}
+	return ""
+}
+
+// subagent renders a subagent's steps beneath its launch on a quiet rail.
+// Inline, only the latest steps and the start of each message are shown;
+// the full form shows every step, message, and nested subagent.
+func (r *Renderer) subagent(children []*app.Entry, terminals map[string]string, width, spinnerFrame int, full bool) string {
+	// The subagent's prompt is already shown as the launch input.
+	visible := make([]*app.Entry, 0, len(children))
+	for _, child := range children {
+		if child.Tool != nil || child.Role != "user" {
+			visible = append(visible, child)
+		}
+	}
+	inner := max(8, width-2)
+	var rows []string
+	if hidden := len(visible) - subagentTail; !full && hidden > 0 {
+		rows = append(rows, theme.Quiet.Render(fmt.Sprintf("… %d earlier %s · o in browse mode shows everything", hidden, map[bool]string{true: "step", false: "steps"}[hidden == 1])))
+		visible = visible[hidden:]
+	}
+	for _, child := range visible {
+		var block string
+		switch {
+		case child.Tool != nil:
+			// Nested subagents open in the full form; other steps stay headings.
+			block = r.tool(child, full && len(child.Children) > 0, terminals, inner, spinnerFrame, full)
+		case child.Role == "thought":
+			block = theme.Quiet.Render("Thinking")
+			if text := strings.TrimSpace(theme.Clean(child.Text)); full && text != "" {
+				block += "\n" + theme.Quiet.Render(text)
+			}
+		default:
+			text := strings.TrimSpace(theme.Clean(child.Text))
+			if text == "" {
+				continue
+			}
+			if !full {
+				text = capLines(text, subagentMessageLimit)
+			}
+			block = text
+		}
+		rows = append(rows, NormalizeWidth(lipgloss.Wrap(block, inner, " "), inner))
+	}
+	rail := theme.Quiet.Render("│ ")
+	lines := strings.Split(strings.Join(rows, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = rail + line
+	}
+	return theme.Quiet.Render("Subagent") + "\n" + strings.Join(lines, "\n")
 }
 
 // capLines keeps the first limit lines of text and states how many were

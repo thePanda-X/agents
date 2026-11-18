@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"agents/internal/app"
 	"agents/internal/harness"
 	"agents/internal/tui/overlays"
 	"agents/internal/tui/theme"
@@ -16,7 +17,10 @@ import (
 )
 
 type reportedChange struct {
+	// Entry is the transcript entry containing the report; a subagent's
+	// report belongs to the entry of its launch, while Tool is the reporting call.
 	Entry int
+	Tool  *app.ToolState
 	Diff  harness.Diff
 }
 type handoffMsg struct{ err error }

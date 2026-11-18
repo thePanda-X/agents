@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 
 	"agents/internal/clientservices"
 	"agents/internal/harness"
@@ -11,18 +12,26 @@ import (
 	"github.com/Tangerg/acp"
 )
 
-func (c *Client) clientConfig() *acp.ClientConfig {
+func (c *Client) clientConfig() (*acp.ClientConfig, error) {
+	capabilities := &acp.ClientCapabilities{
+		Auth:        acp.AuthCapabilities{Terminal: c.options.Launch.Command != ""},
+		Fs:          acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
+		Terminal:    true,
+		Elicitation: acp.OptValue(acp.ElicitationCapabilities{Form: acp.OptValue(acp.ElicitationFormCapabilities{}), URL: acp.OptValue(acp.ElicitationURLCapabilities{})}),
+		Session:     acp.OptValue(acp.ClientSessionCapabilities{ConfigOptions: acp.OptValue(acp.SessionConfigOptionsCapabilities{Boolean: acp.OptValue(acp.BooleanConfigOptionCapabilities{})})}),
+	}
+	if len(c.options.ClientMeta) > 0 {
+		meta, err := acp.NewMeta(c.options.ClientMeta)
+		if err != nil {
+			return nil, fmt.Errorf("client capability metadata: %w", err)
+		}
+		capabilities.Meta = acp.OptValue(meta)
+	}
 	return &acp.ClientConfig{
-		Info: &acp.Implementation{Name: "agents", Title: acp.OptValue("Agents"), Version: "0.1.0"},
-		Capabilities: &acp.ClientCapabilities{
-			Auth:        acp.AuthCapabilities{Terminal: c.options.Launch.Command != ""},
-			Fs:          acp.FileSystemCapabilities{ReadTextFile: true, WriteTextFile: true},
-			Terminal:    true,
-			Elicitation: acp.OptValue(acp.ElicitationCapabilities{Form: acp.OptValue(acp.ElicitationFormCapabilities{}), URL: acp.OptValue(acp.ElicitationURLCapabilities{})}),
-			Session:     acp.OptValue(acp.ClientSessionCapabilities{ConfigOptions: acp.OptValue(acp.SessionConfigOptionsCapabilities{Boolean: acp.OptValue(acp.BooleanConfigOptionCapabilities{})})}),
-		},
+		Info:         &acp.Implementation{Name: "agents", Title: acp.OptValue("Agents"), Version: "0.1.0"},
+		Capabilities: capabilities,
 		SessionUpdate: func(_ context.Context, notification *acp.SessionNotification) {
-			event, err := normalizeUpdate(notification, c.options.DecodeUsageLimits)
+			event, err := normalizeUpdate(notification, c.decoders())
 			if err != nil {
 				c.sink(harness.Event{Kind: harness.Notice, Text: err.Error()})
 				return
@@ -47,7 +56,11 @@ func (c *Client) clientConfig() *acp.ClientConfig {
 		Elicitation: &acp.ElicitationHandlers{Form: c.form, URL: c.url, Complete: func(_ context.Context, _ *acp.CompleteElicitationNotification) {
 			c.sink(harness.Event{Kind: harness.Notice, Text: "External interaction completed."})
 		}},
-	}
+	}, nil
+}
+
+func (c *Client) decoders() decoders {
+	return decoders{usageLimits: c.options.DecodeUsageLimits, parent: c.options.DecodeParent}
 }
 
 func (c *Client) ask(ctx context.Context, interaction *harness.Interaction) harness.Decision {
@@ -63,7 +76,7 @@ func (c *Client) ask(ctx context.Context, interaction *harness.Interaction) harn
 }
 
 func (c *Client) requestPermission(ctx context.Context, r *acp.RequestPermissionRequest) (*acp.RequestPermissionResponse, error) {
-	i := &harness.Interaction{Kind: "permission", SessionID: string(r.SessionID), Tool: toolPatch(r.ToolCall), Message: "The agent requests permission to use a tool."}
+	i := &harness.Interaction{Kind: "permission", SessionID: string(r.SessionID), Tool: toolPatch(r.ToolCall, c.options.DecodeParent), Message: "The agent requests permission to use a tool."}
 	for _, option := range r.Options {
 		i.Options = append(i.Options, harness.PermissionOption{ID: string(option.OptionID), Name: option.Name, Kind: string(option.Kind)})
 	}

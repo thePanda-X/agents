@@ -169,8 +169,21 @@ Agents launches `claude-agent-acp`, **not** `claude acp`. Instructions, skills,
 project settings, and model access remain with Claude Code and the bridge.
 Each harness owns its sessions; switching never transfers conversation context
 or attaches to an existing native CLI process. This is stable ACP support, not
-full native UI parity: bridge-specific extensions such as nested subagent
-transcripts and interactive terminals are not negotiated.
+full native UI parity: interactive terminals, background-task updates, and the
+bridge's native child-session form of subagents are not negotiated.
+
+Subagents can be followed live. Agents declares the bridge's documented
+`subagent-transcript` capability, so a subagent's thinking, messages, and tool
+calls stream into the session tagged with the Agent/Task call that launched
+them. They are nested under that call instead of interleaving with the main
+agent's work: a running subagent's collapsed row shows its step count and its
+latest step (`⎿ Read src/parser.go`); Enter expands it to show the most recent
+steps; `o` in browse mode shows every step, message, and nested subagent.
+Subagent edits still appear in `/changes`, and transcript search matches their
+text through the launching entry. The subagent's prompt is shown once, as the
+launch input. Steps that arrive before their launch is reported are grouped
+under a `Subagent` placeholder that the launch fills in. Older bridges that do
+not stamp subagent updates leave them as ordinary top-level entries.
 
 ### Pi
 
@@ -472,7 +485,8 @@ Completed patch/read/write calls and thinking blocks join other successful tool
 calls in compact compose mode, including tools with diff previews. Browse mode
 restores each entry individually; explicitly expanded entries remain visible in
 either mode. Group labels summarize what the agent did by tool kind, such as
-`Read 3 files · 1 edit · ran 2 commands · 2 thoughts`.
+`Read 3 files · 1 edit · ran 2 commands · 2 thoughts`; a finished subagent counts
+as `1 subagent`.
 Pending and running tools show an animated spinner in place of the fold arrow,
 including when expanded. Finished tools return to their expand/collapse arrows.
 The right side of a tool row reads `pending`, `running`, or `failed`; completed

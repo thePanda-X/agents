@@ -15,6 +15,25 @@ type Entry struct {
 	At                   time.Time
 	Revision             uint64
 	Tool                 *ToolState
+	// Children holds the work of a subagent launched by this tool call, in
+	// arrival order. A nested change also advances every ancestor's Revision.
+	Children []*Entry
+	parent   *Entry
+}
+
+// Walk visits the entry and then its subagent entries, depth first.
+func (e *Entry) Walk(visit func(*Entry)) {
+	visit(e)
+	for _, child := range e.Children {
+		child.Walk(visit)
+	}
+}
+
+// touch records a change to the entry and to the subagent launches containing it.
+func (e *Entry) touch() {
+	for entry := e; entry != nil; entry = entry.parent {
+		entry.Revision++
+	}
 }
 
 type ToolState struct {
@@ -80,6 +99,35 @@ func (s *State) Activity(id string) (time.Time, bool) {
 }
 
 func (s *State) Active() *Conversation { return s.Conversations[s.ActiveID] }
+
+// ToolEntry finds a tool call by ID, including calls made by subagents.
+func (c *Conversation) ToolEntry(id string) *Entry { return c.toolIndex[id] }
+
+// parentEntry returns the tool call that launched a subagent. A launch not
+// reported yet gets a placeholder so the subagent's work stays grouped; the
+// launch's own report later fills the same entry in.
+func (c *Conversation) parentEntry(id string, at time.Time) *Entry {
+	if id == "" {
+		return nil
+	}
+	if entry := c.toolIndex[id]; entry != nil {
+		return entry
+	}
+	entry := &Entry{ID: id, Kind: "tool", At: at, Revision: 1, Tool: &ToolState{ID: id, Title: "Subagent"}}
+	c.toolIndex[id] = entry
+	c.Entries = append(c.Entries, entry)
+	return entry
+}
+
+// add appends an entry to the transcript, or to its subagent launch.
+func (c *Conversation) add(entry, parent *Entry) {
+	if parent == nil {
+		c.Entries = append(c.Entries, entry)
+		return
+	}
+	entry.parent = parent
+	parent.Children = append(parent.Children, entry)
+}
 
 func (s *State) conversation(id string) *Conversation {
 	c := s.Conversations[id]
@@ -206,10 +254,14 @@ func (s *State) Apply(e harness.Event) bool {
 			if e.Err != nil {
 				s.LastError = e.Err
 			}
-			for _, entry := range c.Entries {
-				if entry.Tool != nil && (entry.Tool.Status == "pending" || entry.Tool.Status == "in_progress") && e.Reason == "cancelled" {
-					entry.Tool.Status = "cancelled"
-					entry.Revision++
+			if e.Reason == "cancelled" {
+				for _, root := range c.Entries {
+					root.Walk(func(entry *Entry) {
+						if entry.Tool != nil && (entry.Tool.Status == "pending" || entry.Tool.Status == "in_progress") {
+							entry.Tool.Status = "cancelled"
+							entry.touch()
+						}
+					})
 				}
 			}
 		case harness.Message:
@@ -275,7 +327,10 @@ func applyMetadata(info *harness.SessionInfo, patch harness.SessionInfoPatch) {
 }
 
 func (s *State) applyMessage(c *Conversation, chunk harness.MessageChunk, at time.Time) {
-	if chunk.Role == "user" && c.pendingUser != nil && !c.Loading {
+	// A subagent's prompt is a user chunk too; it must never reconcile the
+	// user's own optimistic prompt.
+	parent := c.parentEntry(chunk.ParentID, at)
+	if chunk.Role == "user" && parent == nil && c.pendingUser != nil && !c.Loading {
 		entry := c.pendingUser
 		c.pendingEcho += chunk.Text
 		entry.ID = chunk.ID
@@ -293,8 +348,12 @@ func (s *State) applyMessage(c *Conversation, chunk harness.MessageChunk, at tim
 	entry := c.messageIndex[key]
 	if chunk.ID == "" {
 		entry = nil
-		if n := len(c.Entries); n > 0 {
-			last := c.Entries[n-1]
+		siblings := c.Entries
+		if parent != nil {
+			siblings = parent.Children
+		}
+		if n := len(siblings); n > 0 {
+			last := siblings[n-1]
 			if last.Kind == "message" && last.Role == chunk.Role && last.ID != "local" {
 				entry = last
 			}
@@ -302,7 +361,7 @@ func (s *State) applyMessage(c *Conversation, chunk harness.MessageChunk, at tim
 	}
 	if entry == nil {
 		// Only reconcile a live optimistic user echo, never replayed history.
-		if chunk.Role == "user" && !c.Loading && len(c.Entries) > 0 {
+		if chunk.Role == "user" && parent == nil && !c.Loading && len(c.Entries) > 0 {
 			last := c.Entries[len(c.Entries)-1]
 			if last.ID == "local" && last.Role == "user" && last.Text == chunk.Text {
 				last.ID = chunk.ID
@@ -313,21 +372,25 @@ func (s *State) applyMessage(c *Conversation, chunk harness.MessageChunk, at tim
 			}
 		}
 		entry = &Entry{ID: chunk.ID, Kind: "message", Role: chunk.Role, At: at}
-		c.Entries = append(c.Entries, entry)
+		c.add(entry, parent)
 		if chunk.ID != "" {
 			c.messageIndex[key] = entry
 		}
 	}
 	entry.Text += chunk.Text
-	entry.Revision++
+	entry.touch()
 }
 
 func (s *State) applyTool(c *Conversation, patch harness.ToolPatch, at time.Time) {
 	entry := c.toolIndex[patch.ID]
 	if entry == nil {
+		var parent *Entry
+		if patch.ParentID != patch.ID {
+			parent = c.parentEntry(patch.ParentID, at)
+		}
 		entry = &Entry{ID: patch.ID, Kind: "tool", At: at, Tool: &ToolState{ID: patch.ID, Title: "Tool", Status: "pending"}}
 		c.toolIndex[patch.ID] = entry
-		c.Entries = append(c.Entries, entry)
+		c.add(entry, parent)
 	}
 	t := entry.Tool
 	if patch.Title != nil {
@@ -357,5 +420,5 @@ func (s *State) applyTool(c *Conversation, patch harness.ToolPatch, at time.Time
 	if patch.Output != nil {
 		t.Output = *patch.Output
 	}
-	entry.Revision++
+	entry.touch()
 }

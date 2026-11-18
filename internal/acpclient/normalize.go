@@ -76,8 +76,42 @@ func configOptions(options []acp.SessionConfigOption) ([]harness.ConfigOption, e
 	return result, nil
 }
 
-func toolPatch(update acp.ToolCallUpdate) harness.ToolPatch {
+// decoders hold optional agent-specific metadata readers supplied by a harness
+// registration. Nil readers ignore the metadata.
+type decoders struct {
+	usageLimits func(json.RawMessage) []harness.UsageLimit
+	parent      func(json.RawMessage) string
+}
+
+// metaJSON re-encodes an update's _meta object for a harness-specific reader.
+func metaJSON(meta acp.Opt[acp.Meta]) json.RawMessage {
+	value, ok := meta.Get()
+	if !ok || value.Len() == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
+func parentID(meta acp.Opt[acp.Meta], decode func(json.RawMessage) string) string {
+	if decode == nil {
+		return ""
+	}
+	if raw := metaJSON(meta); raw != nil {
+		return decode(raw)
+	}
+	return ""
+}
+
+func toolPatch(update acp.ToolCallUpdate, decodeParent func(json.RawMessage) string) harness.ToolPatch {
 	patch := harness.ToolPatch{ID: string(update.ToolCallID), Title: optional(update.Title), Input: optional(update.RawInput), Output: optional(update.RawOutput)}
+	// A subagent's own launch is never its parent.
+	if parent := parentID(update.Meta, decodeParent); parent != patch.ID {
+		patch.ParentID = parent
+	}
 	if kind, ok := update.Kind.Get(); ok {
 		s := string(kind)
 		patch.Kind = &s
@@ -137,11 +171,11 @@ func contentText(block acp.ContentBlock) string {
 	}
 }
 
-func normalizeUpdate(notification *acp.SessionNotification, decodeUsageLimits func(json.RawMessage) []harness.UsageLimit) (harness.Event, error) {
+func normalizeUpdate(notification *acp.SessionNotification, decode decoders) (harness.Event, error) {
 	e := harness.Event{SessionID: string(notification.SessionID)}
 	chunk := func(c acp.ContentChunk, role string) {
 		e.Kind = harness.Message
-		e.Chunk = harness.MessageChunk{ID: string(value(c.MessageID)), Role: role, Text: contentText(c.Content)}
+		e.Chunk = harness.MessageChunk{ID: string(value(c.MessageID)), Role: role, Text: contentText(c.Content), ParentID: parentID(c.Meta, decode.parent)}
 	}
 	switch v := notification.Update.(type) {
 	case *acp.AgentMessageChunk:
@@ -152,9 +186,9 @@ func normalizeUpdate(notification *acp.SessionNotification, decodeUsageLimits fu
 		chunk(v.ContentChunk, "user")
 	case *acp.ToolCall:
 		e.Kind = harness.Tool
-		e.Tool = toolPatch(acp.ToolCallUpdate{ToolCallID: v.ToolCallID, Title: acp.OptValue(v.Title), Kind: v.Kind, Status: v.Status, Content: acp.OptValue(v.Content), Locations: acp.OptValue(v.Locations), RawInput: v.RawInput, RawOutput: v.RawOutput})
+		e.Tool = toolPatch(acp.ToolCallUpdate{ToolCallID: v.ToolCallID, Title: acp.OptValue(v.Title), Kind: v.Kind, Status: v.Status, Content: acp.OptValue(v.Content), Locations: acp.OptValue(v.Locations), RawInput: v.RawInput, RawOutput: v.RawOutput, Meta: v.Meta}, decode.parent)
 	case *acp.ToolCallUpdate:
-		e.Kind, e.Tool = harness.Tool, toolPatch(*v)
+		e.Kind, e.Tool = harness.Tool, toolPatch(*v, decode.parent)
 	case *acp.Plan:
 		e.Kind = harness.Plan
 		for _, entry := range v.Entries {
@@ -186,10 +220,10 @@ func normalizeUpdate(notification *acp.SessionNotification, decodeUsageLimits fu
 		if cost, ok := v.Cost.Get(); ok {
 			e.Usage.Cost = &harness.Cost{Amount: cost.Amount, Currency: cost.Currency}
 		}
-		if decodeUsageLimits != nil {
+		if decode.usageLimits != nil {
 			if meta, ok := v.Meta.Get(); ok {
 				if encoded, err := json.Marshal(meta); err == nil {
-					e.Usage.Limits = decodeUsageLimits(encoded)
+					e.Usage.Limits = decode.usageLimits(encoded)
 				}
 			}
 		}

@@ -378,9 +378,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if frame != m.toolSpinnerFrame && !m.opts.Settings.ReducedMotion {
 			m.toolSpinnerFrame = frame
 			if c := m.state.Active(); c != nil {
-				for _, entry := range c.Entries {
-					if entry.Tool != nil && (entry.Tool.Status == "pending" || entry.Tool.Status == "in_progress") {
-						m.dirty = true
+				for _, root := range c.Entries {
+					root.Walk(func(entry *app.Entry) {
+						if entry.Tool != nil && (entry.Tool.Status == "pending" || entry.Tool.Status == "in_progress") {
+							m.dirty = true
+						}
+					})
+					if m.dirty {
 						break
 					}
 				}

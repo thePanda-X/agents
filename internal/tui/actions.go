@@ -420,16 +420,19 @@ func (m *Model) openChanges() {
 	byPath := make(map[string][]reportedChange)
 	var paths []string
 	reports := 0
-	for index, entry := range c.Entries {
-		if entry.Tool != nil {
+	for index, root := range c.Entries {
+		root.Walk(func(entry *app.Entry) {
+			if entry.Tool == nil {
+				return
+			}
 			for _, diff := range entry.Tool.Diffs {
 				if _, exists := byPath[diff.Path]; !exists {
 					paths = append(paths, diff.Path)
 				}
-				byPath[diff.Path] = append(byPath[diff.Path], reportedChange{Entry: index, Diff: diff})
+				byPath[diff.Path] = append(byPath[diff.Path], reportedChange{Entry: index, Tool: entry.Tool, Diff: diff})
 				reports++
 			}
-		}
+		})
 	}
 	slices.Sort(paths)
 	for _, path := range paths {
@@ -439,7 +442,7 @@ func (m *Model) openChanges() {
 		preview := fmt.Sprintf("%d separate reported edits to %s. Enter lists each report.", len(changes), path)
 		if len(changes) == 1 {
 			value, preview = changes[0], transcript.RenderDiff(changes[0].Diff)
-			detail = "1 report · " + c.Entries[changes[0].Entry].Tool.Status
+			detail = "1 report · " + changes[0].Tool.Status
 		}
 		items = append(items, overlays.Item{ID: path, Label: theme.Clean(path), Detail: detail, Preview: preview, Value: value})
 	}
@@ -680,8 +683,7 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 		if group, ok := item.Value.([]reportedChange); ok {
 			var items []overlays.Item
 			for index, change := range group {
-				tool := m.state.Active().Entries[change.Entry].Tool
-				items = append(items, overlays.Item{ID: fmt.Sprint(index), Label: fmt.Sprintf("Report %d · Entry %d", index+1, change.Entry+1), Detail: tool.Status, Preview: transcript.RenderDiff(change.Diff), Value: change})
+				items = append(items, overlays.Item{ID: fmt.Sprint(index), Label: fmt.Sprintf("Report %d · Entry %d", index+1, change.Entry+1), Detail: change.Tool.Status, Preview: transcript.RenderDiff(change.Diff), Value: change})
 			}
 			m.openList("file_changes", "Reported edits · "+item.Label, items)
 			m.list.Description = "Each report is separate. These are previews, not the current working-tree diff."
@@ -690,7 +692,7 @@ func (m *Model) choose(item overlays.Item) tea.Cmd {
 		}
 		change := item.Value.(reportedChange)
 		m.selected = change.Entry
-		status := m.state.Active().Entries[change.Entry].Tool.Status
+		status := change.Tool.Status
 		m.openInfo("Reported diff · "+theme.Clean(change.Diff.Path)+" · informational, not reapplied", theme.Quiet.Render("Reported tool status: "+theme.Clean(status))+"\n\n"+transcript.RenderDiff(change.Diff))
 		m.infoPaths = []string{change.Diff.Path}
 		m.overlayStack = append(history, overlayFrame{source, kind})

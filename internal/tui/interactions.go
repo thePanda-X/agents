@@ -88,10 +88,7 @@ func (m *Model) permissionDetail(i *harness.Interaction) string {
 	parts := []string{i.Message}
 	var input json.RawMessage
 	if c := m.state.Conversations[i.SessionID]; c != nil {
-		for _, entry := range c.Entries {
-			if entry.Tool == nil || entry.Tool.ID != i.Tool.ID {
-				continue
-			}
+		if entry := c.ToolEntry(i.Tool.ID); entry != nil && entry.Tool != nil {
 			parts = append(parts, entry.Tool.Title)
 			input = entry.Tool.Input
 			parts = append(parts, entry.Tool.Locations...)

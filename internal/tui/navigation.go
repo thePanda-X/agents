@@ -248,6 +248,10 @@ func (m *Model) entryText(entry *app.Entry) string {
 	for _, id := range t.Terminals {
 		parts = append(parts, m.state.TerminalOutputs[id])
 	}
+	// A subagent's work is searchable through the entry of its launch.
+	for _, child := range entry.Children {
+		parts = append(parts, m.entryText(child))
+	}
 	return theme.Clean(strings.Join(parts, "\n\n"))
 }
 
