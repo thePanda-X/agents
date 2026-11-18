@@ -73,11 +73,33 @@ func (m *Model) modalContent(width, height int) string {
 	if m.list != nil {
 		return m.list.View(width, height)
 	}
-	hint := "j/k scroll · Ctrl+D/U page · J/K hunks · e file · Esc close"
-	if width < 60 {
-		hint = "PgDn scroll · Esc close"
+	return modalTitle(m.infoTitle, width) + "\n" + m.info.View() + "\n" + theme.Quiet.Render(ansi.Truncate(m.infoHint(width), width, "…"))
+}
+
+// infoHint lists only the pager keys that do something for the open content:
+// scrolling when it overflows, hunk jumps for multi-hunk diffs, and e for
+// reported files. Esc reads "back" when it returns to a parent picker.
+func (m *Model) infoHint(width int) string {
+	var parts []string
+	if m.info.TotalLineCount() > m.info.Height() {
+		if width < 60 {
+			parts = append(parts, "j/k scroll")
+		} else {
+			parts = append(parts, "j/k scroll · Ctrl+D/U page")
+		}
 	}
-	return modalTitle(m.infoTitle, width) + "\n" + m.info.View() + "\n" + theme.Quiet.Render(ansi.Truncate(hint, width, "…"))
+	if len(m.infoHunks) > 1 && width >= 60 {
+		parts = append(parts, "J/K hunks")
+	}
+	if len(m.infoPaths) > 0 {
+		parts = append(parts, "e open file")
+	}
+	if len(m.overlayStack) > 0 {
+		parts = append(parts, "Esc back")
+	} else {
+		parts = append(parts, "Esc close")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func (m *Model) sizeInfo() {
@@ -88,6 +110,12 @@ func (m *Model) sizeInfo() {
 		wrapped := lipgloss.Wrap(theme.Clean(m.info.GetContent()), width, " ")
 		m.info.SetHeight(min(details, max(1, len(strings.Split(wrapped, "\n")))))
 	} else {
-		m.info.SetHeight(max(1, height-2))
+		// Short content (plans, notices, diagnostics) gets a short pager instead
+		// of a mostly blank full-height panel; long content still scrolls.
+		rows := height - 2
+		if m.infoContent != "" {
+			rows = min(rows, strings.Count(lipgloss.Wrap(m.infoContent, width, " "), "\n")+1)
+		}
+		m.info.SetHeight(max(1, rows))
 	}
 }

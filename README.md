@@ -274,7 +274,11 @@ changes, settings, authentication, and harness selection are available through
 the command palette.
 
 Dialogs are centered over the conversation, which is dimmed behind them, and the
-footer lists the open dialog's keys rather than the composer's. Short or narrow terminals use tighter
+footer lists the open dialog's keys rather than the composer's, naming what Enter
+does in that picker (toggle, insert, load, attach, run…) and whether Esc closes the
+dialog or goes back to its parent. Read-only views size to their content and only
+list keys that apply, such as scrolling for long text, J/K for multi-hunk diffs,
+and `e` when a reported file can be opened. Short or narrow terminals use tighter
 padding and reserve space for the selected action and close/cancel instructions.
 The statusline keeps connection and turn state visible; short-lived notifications
 appear separately above it. A running turn reads `Responding… 12s` with the stop
@@ -520,12 +524,15 @@ selected command into the composer;
 press Enter again to run it. Esc keeps your typed command for further editing
 without adding a completion space. Backspacing does not reopen the picker; Tab
 reopens it explicitly, or type a fresh `/` in an empty composer.
-You can also type or paste a complete command and run it directly.
+You can also type or paste a complete command and run it directly. Commands that
+take a `[query]` open their picker with the filter prefilled, for example
+`/search parser` or `/sessions refactor`; nothing runs until you press Enter.
 
 | Command | Action |
 | --- | --- |
 | `/help`, `/commands` | Show help or browse all slash commands |
-| `/new`, `/sessions` | Create a conversation or browse session history (press `Ctrl+R` in the picker to rename a session locally) |
+| `/new`, `/sessions [query]` | Create a conversation or browse session history (press `Ctrl+R` in the picker to rename a session locally) |
+| `/close` | Close the current session when the agent supports it; its history is kept and can be reopened from `/sessions` |
 | `/model [value]`, `/effort [value]`, `/mode [value]` | Open the relevant selector, or set an advertised value ID/name |
 | `/options`, `/harness`, `/settings`, `/auth` | Open the corresponding controls |
 | `/plan`, `/changes` | Inspect the reported plan or diffs |
@@ -533,7 +540,7 @@ You can also type or paste a complete command and run it directly.
 | `/attach [path]`, `/detach` | Attach a file (or browse files), or remove pending attachments |
 | `/attachments` | Inspect pending attachments or remove individual ones |
 | `/thoughts`, `/copy`, `/editor` | Toggle reasoning, copy highlighted text (or the last response), or compose in your editor |
-| `/search`, `/history`, `/inspect`, `/restore` | Search transcript/history, inspect the selected entry, or restore a cleared draft |
+| `/search [query]`, `/history [query]`, `/inspect`, `/restore` | Search transcript/history, inspect the selected entry, or restore a cleared draft |
 | `/recover`, `/diagnostics` | Restore an interrupted submission for review, or inspect connection/error details |
 | `/skills [query]`, `/skill [query]` | Browse installed skills and stage a loading request |
 | `/paste-image` | Attach an image from the local desktop clipboard |
@@ -565,7 +572,7 @@ identical to those of the canonical command.
 | `/help` | `/?` |
 | `/skills [query]` | `/skill [query]` |
 | `/new` | `/clear`, `/reset`, `/new-chat` |
-| `/sessions` | `/resume`, `/session`, `/conversations` |
+| `/sessions [query]` | `/resume`, `/session`, `/conversations` |
 | `/model [value]` | `/models [value]` |
 | `/effort [value]` | `/reasoning-effort [value]` |
 | `/mode [value]` | `/modes [value]` |

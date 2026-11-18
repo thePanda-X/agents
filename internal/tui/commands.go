@@ -7,6 +7,7 @@ import (
 
 	"agents/internal/harness"
 	"agents/internal/tui/overlays"
+	"agents/internal/tui/theme"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -22,7 +23,8 @@ type slashCommand struct {
 var localSlashCommands = []slashCommand{
 	{Name: "help", Description: "Show shortcuts and slash commands", Action: "help", Aliases: []string{"?"}},
 	{Name: "new", Description: "Start a new conversation", Action: "new_session", Aliases: []string{"clear", "reset", "new-chat"}},
-	{Name: "sessions", Description: "Browse saved conversations", Action: "sessions", Aliases: []string{"resume", "session", "conversations"}},
+	{Name: "sessions", Description: "Browse saved conversations", Arguments: "[query]", Action: "sessions", Aliases: []string{"resume", "session", "conversations"}},
+	{Name: "close", Description: "Close the current session; its history is kept", Action: "close_session"},
 	{Name: "options", Description: "Show all session options", Action: "options"},
 	{Name: "model", Description: "Choose an agent-provided model", Arguments: "[value]", Category: "model", Aliases: []string{"models"}},
 	{Name: "effort", Description: "Choose the reasoning effort", Arguments: "[value]", Category: "thought_level", Aliases: []string{"reasoning-effort"}},
@@ -42,8 +44,8 @@ var localSlashCommands = []slashCommand{
 	{Name: "thoughts", Description: "Toggle expanded reasoning", Action: "thoughts", Aliases: []string{"thinking", "reasoning"}},
 	{Name: "copy", Description: "Copy selected text or the last response", Action: "copy", Aliases: []string{"yank"}},
 	{Name: "editor", Description: "Compose a prompt in your external editor", Action: "editor", Aliases: []string{"edit"}},
-	{Name: "search", Description: "Search the transcript", Action: "search", Aliases: []string{"find"}},
-	{Name: "history", Description: "Search prompt history", Action: "history"},
+	{Name: "search", Description: "Search the transcript", Arguments: "[query]", Action: "search", Aliases: []string{"find"}},
+	{Name: "history", Description: "Search prompt history", Arguments: "[query]", Action: "history"},
 	{Name: "restore", Description: "Restore the last cleared draft", Action: "restore_draft", Aliases: []string{"undo-clear"}},
 	{Name: "recover", Description: "Restore an interrupted submission for review, without resending", Action: "recover"},
 	{Name: "diagnostics", Description: "Inspect connection errors and setup instructions", Action: "diagnostics"},
@@ -116,7 +118,7 @@ func (m *Model) handleSlashCommand(text string) (tea.Cmd, bool) {
 	if local.Category != "" {
 		return m.runSlashOption(local, args), true
 	}
-	if args != "" && local.Name != "attach" && local.Name != "skills" {
+	if args != "" && local.Arguments == "" {
 		m.state.LastError = fmt.Errorf("/%s takes no arguments; use /agent %s to send it to the harness", name, name)
 		return nil, true
 	}
@@ -128,7 +130,14 @@ func (m *Model) handleSlashCommand(text string) (tea.Cmd, bool) {
 		// The remainder is a literal path, including spaces, not shell source.
 		return m.attach(args), true
 	}
-	return m.perform(local.Action), true
+	cmd := m.perform(local.Action)
+	if args != "" && m.list != nil {
+		// [query] arguments prefill the picker's filter; nothing runs until Enter.
+		m.list.Search.SetValue(args)
+		m.list.Search.CursorEnd()
+		m.list.Cursor, m.list.Scroll = 0, 0
+	}
+	return cmd, true
 }
 
 func (m *Model) consumeSlashCommand() {
@@ -202,7 +211,9 @@ func (m *Model) slashItems(agentOnly bool) []overlays.Item {
 			if local.Arguments != "" {
 				label += " " + local.Arguments
 			}
-			detail := "Client · " + local.Description
+			// The preview and title name the source; the narrow detail column
+			// is better spent on the description itself.
+			detail := local.Description
 			keywords := strings.Join(local.Aliases, " ")
 			preview := local.Description + "\n\nRuns locally. Enter inserts the command; Enter in the composer runs it."
 			if keywords != "" {
@@ -244,6 +255,12 @@ func (m *Model) openSlashCommands(agentOnly bool) {
 	m.openList("commands", title, m.slashItems(agentOnly))
 	m.list.Hint = "Enter insert · Esc close"
 	m.list.Description = "Client commands run locally. Agent commands are sent to the harness. Enter inserts a command; Enter again runs it."
+	m.list.EmptyMessage = "No slash commands available."
+	if agentOnly {
+		name := theme.Clean(m.opts.Descriptor.Name)
+		m.list.Description = "Commands advertised by " + name + ". Enter inserts a command; Enter again sends it."
+		m.list.EmptyMessage = name + " has not advertised commands. Type /agent <command> to send one anyway."
+	}
 	name, args, ok := parseSlashInvocation(m.input.Value())
 	if ok {
 		if name == "agent" {
@@ -266,7 +283,7 @@ func completeSlashCommand(input, invocation string) string {
 }
 
 func slashHelp() string {
-	lines := []string{"Slash commands (type / to browse; Enter inserts, then runs):"}
+	lines := []string{theme.Heading.Render("Slash commands") + theme.Quiet.Render(" · type / to browse; Enter inserts, then runs")}
 	for _, local := range localSlashCommands {
 		label := "/" + local.Name
 		if local.Arguments != "" {

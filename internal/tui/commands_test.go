@@ -192,7 +192,7 @@ func TestSlashPickerLabelsSourcesAndHandlesCollisions(t *testing.T) {
 		switch item.ID {
 		case "client:plan":
 			clientPlan++
-			if selection.Invocation != "/plan" || !strings.Contains(item.Detail, "Client") {
+			if selection.Invocation != "/plan" || item.Group != "Client" || !strings.Contains(item.Preview, "Runs locally") {
 				t.Fatal("incorrect client item")
 			}
 		case "agent:plan":

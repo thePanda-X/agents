@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"agents/internal/tui/theme"
+
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/google/jsonschema-go/jsonschema"
@@ -49,9 +51,12 @@ type Form struct {
 	Schema       *jsonschema.Resolved
 	Content      map[string]any
 	Message      string
-	scroll       int
-	pageRows     int
-	reveal       bool
+	// Title and Hint replace the agent-question heading and key hint for
+	// client-owned forms, such as renaming a session.
+	Title, Hint string
+	scroll      int
+	pageRows    int
+	reveal      bool
 	// returnToReview sends Enter back to the review page after editing one
 	// answer, instead of advancing through the remaining questions.
 	returnToReview bool
@@ -193,7 +198,13 @@ func newField(name string, property *jsonschema.Schema, required bool) (*Field, 
 		field.Options = []FormOption{{Value: "false", Label: "No"}, {Value: "true", Label: "Yes"}}
 	}
 	field.Input = textinput.New()
-	field.Input.Prompt = "  "
+	// A visible prompt and placeholder keep an empty free-text answer from
+	// rendering as a blank row the user cannot recognize as a field.
+	field.Input.Prompt, field.Input.Placeholder = "› ", "Type your answer…"
+	style := field.Input.Styles()
+	style.Focused.Prompt, style.Focused.Placeholder = theme.Accent, theme.Quiet
+	style.Blurred.Prompt, style.Blurred.Placeholder = theme.Quiet, theme.Quiet
+	field.Input.SetStyles(style)
 	field.Input.CharLimit = 8192
 	field.Input.SetWidth(45)
 	field.applyDefault(property.Default)

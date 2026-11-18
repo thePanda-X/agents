@@ -379,11 +379,14 @@ func (l *List) View(width, height int) string {
 		} else if l.Error != "" {
 			hint = "Enter retry · Esc close"
 		} else if strings.Contains(l.Hint, "insert") {
-			hint = "Enter insert · Esc"
+			hint = "Enter insert · Esc close"
 		} else if strings.Contains(l.Hint, "toggle") {
-			hint = "Enter toggle · Esc"
+			hint = "Enter toggle · Esc close"
 		} else if strings.Contains(l.Hint, "Del") {
 			hint = "Del remove · Esc close"
+		}
+		if width < 40 && !l.MultiSelect {
+			hint = strings.TrimSuffix(hint, " close")
 		}
 	}
 	if footerRows == 2 {

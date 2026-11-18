@@ -367,6 +367,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case harness.SessionClosed:
 				if e.SessionID == oldID {
 					m.stashClosedDraft(oldKey)
+					m.state.Notice = "Session closed · history kept; " + m.binding("sessions") + " reopens it"
 				}
 			}
 		}

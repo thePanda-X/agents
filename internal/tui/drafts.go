@@ -75,6 +75,10 @@ func (m *Model) restoreAttachments() {
 
 func (m *Model) clearAttachments() {
 	buffer := m.currentDraft()
+	if len(m.attachments) == 0 && buffer.Pending == 0 && !m.pastingImage {
+		m.state.Notice = "No pending attachments to remove"
+		return
+	}
 	buffer.Generation++
 	buffer.Pending, buffer.Attachments = 0, nil
 	m.attachments = nil

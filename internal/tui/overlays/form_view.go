@@ -75,7 +75,9 @@ func (f *Form) bodyHeight(height, fixed, errors, footer int) int {
 
 func (f *Form) title(width int) string {
 	title := "Question"
-	if f.Review {
+	if f.Title != "" {
+		title = f.Title
+	} else if f.Review {
 		title = "Review answers"
 	} else if len(f.Questions) > 1 {
 		title = fmt.Sprintf("Questions · %d of %d", f.Cursor+1, len(f.Questions))
@@ -362,6 +364,8 @@ func (f *Form) footer(width int, scroll bool) []string {
 func (f *Form) hint(scroll bool) string {
 	var hint string
 	switch {
+	case f.Hint != "":
+		hint = f.Hint
 	case f.Review:
 		hint = "↑↓ answer · Enter edit/submit · Ctrl+Enter send · Esc skip"
 	case len(f.Questions) == 0:

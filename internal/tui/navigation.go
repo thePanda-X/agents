@@ -419,6 +419,8 @@ func (m *Model) openCodeBlocks() {
 	}
 	m.openList("code", "Copy code block", items)
 	m.list.Description = "Enter copies raw code without Markdown fences (terminal clipboard required)."
+	m.list.EmptyMessage = "The selected entry has no fenced code blocks. Select a response with ↑↓ first."
+	m.list.Hint = "Enter copy · Esc close"
 }
 
 func (m *Model) jumpHunk(direction int) {

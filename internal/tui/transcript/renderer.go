@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -692,7 +693,13 @@ func diffLines(text string) []string {
 }
 
 func RenderDiff(diff harness.Diff) string {
-	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: diffLines(diff.OldText), B: diffLines(diff.NewText), FromFile: "a/" + theme.Clean(diff.Path), ToFile: "b/" + theme.Clean(diff.Path), Context: 3})
+	// Git's a/ and b/ prefixes only make sense for relative paths; absolute
+	// paths would otherwise render as "a//workspace/file.go".
+	from, to := "a/"+theme.Clean(diff.Path), "b/"+theme.Clean(diff.Path)
+	if strings.HasPrefix(diff.Path, "/") || filepath.IsAbs(diff.Path) {
+		from, to = theme.Clean(diff.Path), theme.Clean(diff.Path)
+	}
+	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: diffLines(diff.OldText), B: diffLines(diff.NewText), FromFile: from, ToFile: to, Context: 3})
 	if err != nil {
 		return theme.Error.Render("Cannot render diff: " + err.Error())
 	}

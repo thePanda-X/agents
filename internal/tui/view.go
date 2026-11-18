@@ -267,7 +267,13 @@ func (m *Model) activity(width int) string {
 			if m.opts.Settings.ReducedMotion {
 				frame = "●"
 			}
-			left = theme.Accent.Render(frame) + theme.Quiet.Render(" Responding… "+elapsedTime(time.Since(c.StartedAt)))
+			status := " Responding…"
+			// A turn adopted without a local start time (for example after a
+			// reload) has no meaningful elapsed time to show.
+			if !c.StartedAt.IsZero() {
+				status += " " + elapsedTime(time.Since(c.StartedAt))
+			}
+			left = theme.Accent.Render(frame) + theme.Quiet.Render(status)
 		}
 	}
 	right := ""
@@ -455,9 +461,12 @@ func (m *Model) footer(width int) string {
 	case m.list != nil && m.overlay == "search":
 		mode, hints = "SEARCH", []string{"Enter:jump", "Esc:close"}
 	case m.list != nil:
-		mode, hints = "PICKER", []string{"↑↓:select", "Enter:choose", "Esc:close"}
+		mode, hints = "PICKER", m.pickerHints()
 	case m.overlay == "info":
-		mode, hints = "VIEW", []string{"j/k:scroll", "Esc:close"}
+		mode, hints = "VIEW", []string{m.escHint()}
+		if m.info.TotalLineCount() > m.info.Height() {
+			hints = []string{"j/k:scroll", m.escHint()}
+		}
 	default:
 		overlayOpen = false
 	}
@@ -485,6 +494,57 @@ func (m *Model) footer(width int) string {
 		hints = []string{"y:copy", "Esc:clear"}
 	}
 	return footerLine(left, hints, width)
+}
+
+// escHint says whether Esc returns to a parent picker or closes the dialog.
+func (m *Model) escHint() string {
+	if len(m.overlayStack) > 0 {
+		return "Esc:back"
+	}
+	return "Esc:close"
+}
+
+// pickerHints names what Enter actually does in the open picker, plus its
+// picker-specific keys, so the footer matches the dialog's own instructions.
+func (m *Model) pickerHints() []string {
+	enter := "Enter:choose"
+	var extra []string
+	switch m.overlay {
+	case "settings":
+		enter = "Enter:toggle"
+	case "commands":
+		enter = "Enter:insert"
+	case "files":
+		enter, extra = "Enter:attach", []string{"Tab:mark"}
+	case "attachments", "pastes":
+		enter, extra = "Enter:inspect", []string{"Del:remove"}
+	case "sessions":
+		enter, extra = "Enter:load", []string{"Ctrl+R:rename"}
+		if m.state.Peer.Capabilities.Delete {
+			extra = append(extra, "Ctrl+X:delete")
+		}
+	case "history":
+		enter = "Enter:use"
+	case "code":
+		enter = "Enter:copy"
+	case "palette":
+		enter = "Enter:run"
+	case "changes", "file_changes":
+		enter = "Enter:inspect"
+	case "harnesses":
+		enter = "Enter:switch"
+	case "auth":
+		enter = "Enter:sign in"
+	case "skills":
+		enter = "Enter:stage"
+	case "delete":
+		enter = "Enter:confirm"
+	}
+	if m.list != nil && m.list.Error != "" {
+		enter, extra = "Enter:retry", nil
+	}
+	// Enter and Esc come first so narrow footers drop the optional keys.
+	return append(append([]string{enter, m.escHint()}, extra...), "↑↓:select")
 }
 
 // footerLine joins the mode chip and key:action hints, dropping trailing hints

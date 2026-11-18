@@ -51,7 +51,7 @@ var actionCatalog = []actionSpec{
 	{"auth", "Agent authentication", ""},
 	{"reconnect", "Reconnect agent", "alt+r"},
 	{"cancel", "Cancel turn", ""},
-	{"close_session", "Close current session (keeps history)", ""},
+	{"close_session", "Close session (keeps history)", ""},
 	{"help", "Help and shortcuts", ""},
 	{"quit", "Quit", "ctrl+d"},
 }
@@ -371,6 +371,10 @@ func (m *Model) perform(action string) tea.Cmd {
 	case "thoughts":
 		m.opts.Settings.ShowThoughts = !m.opts.Settings.ShowThoughts
 		m.dirty = true
+		m.state.Notice = "Reasoning collapsed by default"
+		if m.opts.Settings.ShowThoughts {
+			m.state.Notice = "Reasoning expanded by default"
+		}
 		return m.save()
 	case "effort":
 		return m.cycleEffort()
@@ -419,6 +423,7 @@ func (m *Model) perform(action string) tea.Cmd {
 	case "close_session":
 		if c := m.state.Active(); c != nil && !c.Busy && m.state.Peer.Capabilities.Close {
 			id, controller := c.Info.ID, m.opts.Controller
+			m.state.Notice = "Closing session…"
 			return command(func() { controller.CloseSession(id) })
 		}
 	case "help":

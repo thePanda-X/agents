@@ -273,9 +273,11 @@ func (m *Model) renameSession(item overlays.Item) {
 		m.state.LastError = err
 		return
 	}
+	form.Title, form.Hint = "Rename session", "Enter save · Esc cancel"
 	form.Message = "Client-side name shown instead of the agent's title. Leave empty to restore the automatic title."
 	form.Questions[0].Field.Input.SetValue(m.sessionLabel(info.ID, info.Title))
 	form.Questions[0].Field.Input.CharLimit = 200
+	form.Questions[0].Field.Input.Placeholder = "Automatic title"
 	m.renamingSessionID = info.ID
 	m.form = form
 	m.input.Blur()
@@ -403,12 +405,12 @@ func (m *Model) openPlan() {
 		if entry.Status == "in_progress" {
 			icon = "◌"
 		}
-		lines = append(lines, theme.Body.Render(icon+" "+theme.Clean(entry.Content))+theme.Quiet.Render("  "+entry.Status))
+		lines = append(lines, theme.Body.Render(icon+" "+theme.Clean(entry.Content))+theme.Quiet.Render("  "+strings.ReplaceAll(theme.Clean(entry.Status), "_", " ")))
 	}
 	if len(lines) == 0 {
 		lines = []string{"This agent has not reported a plan."}
 	}
-	m.openInfo("Agent plan", strings.Join(lines, "\n\n"))
+	m.openInfo("Agent plan", strings.Join(lines, "\n"))
 }
 
 func (m *Model) openChanges() {
@@ -438,28 +440,49 @@ func (m *Model) openChanges() {
 	for _, path := range paths {
 		changes := byPath[path]
 		var value any = changes
-		detail := fmt.Sprintf("%d reports", len(changes))
+		detail := plural(len(changes), "edit")
 		preview := fmt.Sprintf("%d separate reported edits to %s. Enter lists each report.", len(changes), path)
 		if len(changes) == 1 {
 			value, preview = changes[0], transcript.RenderDiff(changes[0].Diff)
-			detail = "1 report · " + changes[0].Tool.Status
+			detail = changes[0].Tool.Status
 		}
-		items = append(items, overlays.Item{ID: path, Label: theme.Clean(path), Detail: detail, Preview: preview, Value: value})
+		items = append(items, overlays.Item{ID: path, Label: theme.Clean(workspaceRelative(c.Info.Workspace, path)), Detail: detail, Keywords: path, Preview: preview, Value: value})
 	}
 	m.openList("changes", "Reported changes", items)
-	m.list.Description = fmt.Sprintf("%d files · %d reports. Agent previews, not current working-tree diffs. Enter inspects; repeated edits remain separate.", len(paths), reports)
+	m.list.Description = fmt.Sprintf("%s · %s. Agent previews, not current working-tree diffs. Enter inspects; repeated edits remain separate.", plural(len(paths), "file"), plural(reports, "report"))
 	m.list.EmptyMessage = "The agent has not reported any structured diffs."
+}
+
+// plural formats a count with its noun, adding "s" unless the count is one.
+func plural(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
+}
+
+// workspaceRelative shortens paths inside the workspace for display. Paths
+// outside it, or that cannot be related, are shown unchanged.
+func workspaceRelative(workspace, path string) string {
+	if workspace == "" {
+		return path
+	}
+	rel, err := filepath.Rel(workspace, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return path
+	}
+	return filepath.ToSlash(rel)
 }
 
 func (m *Model) openSettings() {
 	m.openList("settings", "Interface settings", []overlays.Item{
-		{ID: "mouse", Label: "Mouse scrolling, text selection, and links", Detail: onOff(m.opts.Settings.Mouse)},
-		{ID: "thoughts", Label: "Expand reasoning", Detail: onOff(m.opts.Settings.ShowThoughts)},
-		{ID: "vim", Label: "Vim navigation (Esc browse, i compose)", Detail: onOff(m.opts.Settings.VimNavigation)},
-		{ID: "compact", Label: "Compact layout", Detail: onOff(m.opts.Settings.Compact)},
-		{ID: "appearance", Label: "Appearance", Detail: appearanceName(m.opts.Settings.Appearance), Preview: "Enter cycles Graphite, High contrast, and Terminal default (no application colors)."},
-		{ID: "motion", Label: "Reduced motion", Detail: onOff(m.opts.Settings.ReducedMotion)},
-		{ID: "clock24", Label: "24-hour message times", Detail: onOff(m.opts.Settings.Clock24), Preview: "Show sent-message times as 15:04 instead of 3:04 PM."},
+		{ID: "mouse", Label: "Mouse support", Detail: onOff(m.opts.Settings.Mouse), Keywords: "scroll wheel select highlight links click", Preview: "Mouse wheel scrolling, drag-to-highlight text selection, right-click copy, and clickable links.\n\nTurn off to use your terminal's native selection instead."},
+		{ID: "thoughts", Label: "Expand reasoning", Detail: onOff(m.opts.Settings.ShowThoughts), Keywords: "thinking thoughts", Preview: "Show reported thinking blocks expanded by default. Blocks you fold or unfold individually keep your choice.\n\nShortcut: /thoughts"},
+		{ID: "vim", Label: "Vim navigation", Detail: onOff(m.opts.Settings.VimNavigation), Keywords: "keys browse", Preview: "Esc enters browse mode and i returns to the composer. Ctrl+D/U scroll half a page while browsing.\n\nWhen off, Tab switches focus and Esc returns to the composer."},
+		{ID: "compact", Label: "Compact layout", Detail: onOff(m.opts.Settings.Compact), Keywords: "density spacing", Preview: "Less padding, and successful tools and thinking are grouped into one summary row while composing.\n\nShortcut: " + m.binding("compact")},
+		{ID: "appearance", Label: "Appearance", Detail: appearanceName(m.opts.Settings.Appearance), Keywords: "theme colors contrast", Preview: "Enter cycles Graphite, High contrast, and Terminal default (no application colors)."},
+		{ID: "motion", Label: "Reduced motion", Detail: onOff(m.opts.Settings.ReducedMotion), Keywords: "animation spinner", Preview: "Replace spinners and other activity animations with static indicators."},
+		{ID: "clock24", Label: "24-hour message times", Detail: onOff(m.opts.Settings.Clock24), Keywords: "time clock", Preview: "Show sent-message times as 15:04 instead of 3:04 PM."},
 	})
 	m.list.Hint = "Enter toggle · Esc close"
 	if m.opts.Store != nil {
@@ -544,48 +567,68 @@ func (m *Model) openAuth() {
 	}
 }
 
+// helpRows formats key/description pairs in one aligned column so every help
+// section, including generated shortcuts, lines up.
+func helpRows(rows ...[2]string) []string {
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, fmt.Sprintf("%-18s %s", row[0], row[1]))
+	}
+	return lines
+}
+
 func (m *Model) openHelp() {
-	var lines []string
+	var shortcuts [][2]string
 	for _, action := range actionCatalog {
 		if m.binding(action.ID) != "—" {
-			lines = append(lines, fmt.Sprintf("%-14s %s", m.binding(action.ID), action.Label))
+			shortcuts = append(shortcuts, [2]string{m.binding(action.ID), action.Label})
 		}
 	}
-	lines = append(lines, `
-Ctrl+C       Dismiss overlay / cancel interaction / stop turn / clear draft
-/restore     Restore the last cleared draft (does not overwrite text)
-Enter        Send or run a slash command
-Alt+Enter / Ctrl+J / Shift+Enter   Insert newline
-Shift+Tab    Cycle agent-provided mode
-Alt+↑ / ↓    Prompt history (Alt+Down restores the previous draft)
-Tab          Switch composer/transcript, complete /commands or @files
-PgUp/PgDn    Scroll conversation
-
-Browse mode:
-j/k          Scroll transcript by visual line
-↑/↓          Select entries
-i            Compose, preserving the draft cursor
-gg / G       First / latest entry
-J / K        Next / previous turn
-] / [        Next / previous failed tool
-} / {        Next / previous reported edit
-/            Search transcript; n/N repeat
-Enter/Space  Expand tool or thought
-o            Open entry detail pager
-y / c        Copy highlighted text (or entry) / choose code block
-e / v        Open reported file / export output to editor
-?            Help
-
-With Vim navigation enabled: Esc enters browse; Ctrl+D/U half-page scroll.
-Mouse: click a transcript link to open it in the browser.
-Left-drag text to highlight; right-click or y copies it.
-Esc clears text highlighting. Copy uses terminal OSC52 clipboard support.
-Detail pager: j/k scroll · Ctrl+D/U half-page · gg/G top/bottom · J/K hunks.
-Pickers: type to filter · Ctrl+N/P select · Tab marks files · Esc closes.
-
-Only reported usage is displayed. Reported diffs are not current working-tree
-changes and are never reapplied. Local agents are trusted, not sandboxed.`)
-	m.openInfo("Agents · keyboard-first ACP client", strings.Join(lines, "\n")+"\n\n"+slashHelp())
+	section := func(title string, rows []string) string {
+		return theme.Heading.Render(title) + "\n" + strings.Join(rows, "\n")
+	}
+	sections := []string{
+		section("Shortcuts", helpRows(shortcuts...)),
+		section("Composer", helpRows(
+			[2]string{"Enter", "Send, or run a slash command"},
+			[2]string{"Alt+Enter, Ctrl+J", "Insert newline (Shift+Enter in enhanced terminals)"},
+			[2]string{"Tab", "Switch composer/transcript; complete /commands or @files"},
+			[2]string{"Shift+Tab", "Cycle agent-provided mode"},
+			[2]string{"Alt+↑ / Alt+↓", "Prompt history (Alt+↓ restores your draft)"},
+			[2]string{"PgUp / PgDn", "Scroll conversation"},
+			[2]string{"Ctrl+Home / End", "First / latest output"},
+			[2]string{"Ctrl+C", "Dismiss dialog, cancel interaction, stop turn, or clear draft"},
+			[2]string{"/restore", "Restore the last cleared draft (never overwrites text)"},
+		)),
+		section("Browse mode", helpRows(
+			[2]string{"j / k", "Scroll transcript by visual line"},
+			[2]string{"↑ / ↓", "Select entries"},
+			[2]string{"Enter / Space", "Expand or collapse tool, thought, or long message"},
+			[2]string{"gg / G", "First / latest entry"},
+			[2]string{"J / K", "Next / previous turn"},
+			[2]string{"] / [", "Next / previous failed tool"},
+			[2]string{"} / {", "Next / previous reported edit"},
+			[2]string{"/  n / N", "Search transcript; next / previous match"},
+			[2]string{"o", "Open entry detail pager"},
+			[2]string{"y / c", "Copy highlighted text (or entry) / choose code block"},
+			[2]string{"e / v", "Open reported file / export output to editor"},
+			[2]string{"i", "Compose, preserving the draft cursor"},
+			[2]string{"?", "Help"},
+		)) + "\nWith Vim navigation enabled, Esc enters browse and Ctrl+D/U half-page scroll.",
+		section("Dialogs", helpRows(
+			[2]string{"Pickers", "Type to filter · Ctrl+N/P select · Tab marks files · Esc closes"},
+			[2]string{"Detail pager", "j/k scroll · Ctrl+D/U half-page · gg/G top/bottom · J/K hunks"},
+			[2]string{"Sessions", "Ctrl+R renames locally · Ctrl+X deletes (when supported)"},
+		)),
+		section("Mouse", []string{
+			"Click a transcript link to open it in the browser. Left-drag text to",
+			"highlight; right-click or y copies it and Esc clears it. Copy uses",
+			"terminal OSC52 clipboard support. Toggle mouse support in /settings.",
+		}),
+		slashHelp(),
+		theme.Quiet.Render("Only reported usage is displayed. Reported diffs are not current working-tree\nchanges and are never reapplied. Local agents are trusted, not sandboxed."),
+	}
+	m.openInfo("Agents · keyboard-first ACP client", strings.Join(sections, "\n\n"))
 }
 
 func (m *Model) choose(item overlays.Item) tea.Cmd {
