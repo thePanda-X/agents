@@ -38,6 +38,9 @@ type Renderer struct {
 	conversation *app.Conversation
 	generation   uint64
 	stats        map[*harness.Diff]diffStat
+	// workspace shortens reported tool locations; now labels running tools.
+	workspace string
+	now       time.Time
 }
 
 func New() *Renderer {
@@ -48,7 +51,7 @@ func New() *Renderer {
 // sections. Raw entry text remains authoritative for clipboard/editor exports.
 func (r *Renderer) Detail(entry *app.Entry, width int, terminals map[string]string) string {
 	if entry.Tool != nil {
-		return r.tool(entry, true, terminals, max(10, width), 0, true)
+		return r.toolDetail(entry, terminals, max(10, width))
 	}
 	text := theme.Clean(entry.Text)
 	if entry.Role == "thought" && strings.TrimSpace(text) == "" {
@@ -71,6 +74,8 @@ type Options struct {
 	Clock24           bool
 	Expanded          map[string]bool
 	Terminals         map[string]string
+	// Now drives running-tool elapsed labels; zero hides them.
+	Now time.Time
 }
 
 func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) {
@@ -78,6 +83,11 @@ func (r *Renderer) Render(c *app.Conversation, options Options) (string, []int) 
 		clear(r.cache)
 		clear(r.stats)
 		r.conversation = c
+	}
+	r.now = options.Now
+	r.workspace = ""
+	if c != nil {
+		r.workspace = c.Info.Workspace
 	}
 	if c == nil || len(c.Entries) == 0 {
 		clear(r.cache)
@@ -479,7 +489,38 @@ const subagentMessageLimit = 6
 
 func active(t *app.ToolState) bool { return t.Status == "pending" || t.Status == "in_progress" }
 
+// toolDetail renders a tool for the detail pager: every section in full and
+// without the transcript's body rail, which would only narrow diffs there.
+func (r *Renderer) toolDetail(entry *app.Entry, terminals map[string]string, width int) string {
+	heading, body := r.toolParts(entry, true, terminals, width, 0, true)
+	if len(body) == 0 {
+		return heading
+	}
+	return NormalizeWidth(lipgloss.Wrap(heading+"\n"+strings.Join(body, "\n"), width, " "), width)
+}
+
 func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]string, width, spinnerFrame int, full bool) string {
+	heading, body := r.toolParts(entry, expanded, terminals, width, spinnerFrame, full)
+	if !expanded {
+		return heading
+	}
+	if len(body) == 0 {
+		body = []string{theme.Quiet.Render("No details reported by the agent.")}
+	}
+	// Expanded sections hang off a quiet rail under the heading so a long
+	// output visibly belongs to its action and the next heading stands apart.
+	inner := max(8, width-2)
+	lines := strings.Split(NormalizeWidth(lipgloss.Wrap(strings.Join(body, "\n"), inner, " "), inner), "\n")
+	rail := theme.Quiet.Render("│ ")
+	for i, line := range lines {
+		lines[i] = rail + line
+	}
+	return heading + "\n" + strings.Join(lines, "\n")
+}
+
+// toolParts builds a tool's heading (with any collapsed hint rows) and, when
+// expanded, its body sections.
+func (r *Renderer) toolParts(entry *app.Entry, expanded bool, terminals map[string]string, width, spinnerFrame int, full bool) (string, []string) {
 	t := entry.Tool
 	icon, statusStyle := "▸", theme.Quiet
 	if expanded {
@@ -501,6 +542,9 @@ func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]st
 		status = theme.Accent.Render("running")
 		if t.Status == "pending" {
 			status = theme.Quiet.Render("pending")
+		} else if elapsed := r.now.Sub(entry.At); !entry.At.IsZero() && !r.now.IsZero() && elapsed >= 2*time.Second {
+			// A visible clock tells a slow command from a stuck one.
+			status += theme.Quiet.Render(" · " + runningDuration(elapsed))
 		}
 	}
 	steps := 0
@@ -519,13 +563,20 @@ func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]st
 	}
 	heading := theme.Line(statusStyle.Render(icon+" "+theme.Clean(t.Title)), status, width)
 	if !expanded {
+		hint := ""
+		switch {
 		// A collapsed running subagent shows what it is doing right now.
-		if active(t) && len(entry.Children) > 0 {
-			if latest := latestStep(entry.Children); latest != "" {
-				heading += "\n" + ansi.Truncate(theme.Quiet.Render("  ⎿ "+latest), width, "…")
-			}
+		case active(t) && len(entry.Children) > 0:
+			hint = latestStep(entry.Children)
+		// A collapsed failure says why, so the reason is visible without
+		// expanding every red row.
+		case t.Status == "failed":
+			hint = firstLine(t.Text)
 		}
-		return heading
+		if hint != "" {
+			heading += "\n" + ansi.Truncate(theme.Quiet.Render("  ⎿ "+hint), width, "…")
+		}
+		return heading, nil
 	}
 	section := func(text string) string {
 		if full {
@@ -533,10 +584,13 @@ func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]st
 		}
 		return capLines(text, toolOutputLimit)
 	}
-	parts := []string{heading}
-	if len(t.Locations) > 0 {
-		parts = append(parts, theme.Quiet.Render(theme.Clean(strings.Join(t.Locations, "\n"))))
+	var parts []string
+	if locations := r.locations(t); len(locations) > 0 {
+		parts = append(parts, theme.Quiet.Render(theme.Clean(strings.Join(locations, "\n"))))
 	}
+	// The agent's text result is labeled only when raw payload sections
+	// surround it; on its own (a read file, a message) it needs no caption.
+	labeled := len(t.Input) > 0 || len(t.Output) > 0
 	if len(t.Input) > 0 {
 		parts = append(parts, theme.Quiet.Render("Input"), section(pretty(t.Input)))
 	}
@@ -544,6 +598,9 @@ func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]st
 		parts = append(parts, r.subagent(entry.Children, terminals, width, spinnerFrame, full))
 	}
 	if t.Text != "" {
+		if labeled {
+			parts = append(parts, theme.Quiet.Render("Result"))
+		}
 		parts = append(parts, section(theme.Clean(t.Text)))
 	}
 	for _, diff := range t.Diffs {
@@ -558,7 +615,58 @@ func (r *Renderer) tool(entry *app.Entry, expanded bool, terminals map[string]st
 	if len(t.Output) > 0 {
 		parts = append(parts, theme.Quiet.Render("Output"), section(pretty(t.Output)))
 	}
-	return NormalizeWidth(lipgloss.Wrap(strings.Join(parts, "\n"), width, " "), width)
+	return heading, parts
+}
+
+// locations lists a tool's reported paths relative to the workspace, omitting
+// files whose diff header already names them.
+func (r *Renderer) locations(t *app.ToolState) []string {
+	diffed := make(map[string]bool, len(t.Diffs))
+	for _, diff := range t.Diffs {
+		diffed[diff.Path] = true
+	}
+	var paths []string
+	for _, location := range t.Locations {
+		if diffed[location] {
+			continue
+		}
+		paths = append(paths, relativePath(location, r.workspace))
+	}
+	return paths
+}
+
+// relativePath shortens path to be relative to workspace when it lies inside
+// it. Other paths, including a trailing ":line", are returned unchanged.
+func relativePath(path, workspace string) string {
+	if workspace == "" || !filepath.IsAbs(workspace) && !strings.HasPrefix(workspace, "/") {
+		return path
+	}
+	for _, separator := range []string{"/", "\\"} {
+		prefix := strings.TrimRight(workspace, "/\\") + separator
+		if rest, ok := strings.CutPrefix(path, prefix); ok && rest != "" {
+			return rest
+		}
+	}
+	return path
+}
+
+// firstLine returns the first non-blank line of text, cleaned for display.
+func firstLine(text string) string {
+	for _, line := range strings.Split(theme.Clean(text), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// runningDuration formats a running tool's elapsed time in whole seconds so
+// the label does not flicker on every spinner frame.
+func runningDuration(elapsed time.Duration) string {
+	if elapsed < 10*time.Second {
+		return fmt.Sprintf("%ds", int(elapsed/time.Second))
+	}
+	return formatThoughtDuration(elapsed)
 }
 
 // latestStep summarizes a subagent's most recent visible step on one line.

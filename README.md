@@ -495,7 +495,15 @@ Pending and running tools show an animated spinner in place of the fold arrow,
 including when expanded. Finished tools return to their expand/collapse arrows.
 The right side of a tool row reads `pending`, `running`, or `failed`; completed
 edits with structured diffs show their line counts, such as `+12 −3`, and other
-completed tools stay quiet. Diff file headers are not colored as changes.
+completed tools stay quiet. Running tools add their elapsed time once they pass
+two seconds (`running · 14s`), refreshed each second even with reduced motion.
+A collapsed failed tool shows the first line of its reported error beneath the
+row (`⎿ exit status 1`). Diff file headers are not colored as changes.
+Expanded tools hang their sections off a quiet `│` rail so output stays visibly
+attached to its action. Reported locations inside the workspace are shown
+relative to it, and a location already named by a diff header is not repeated.
+The agent's text result is captioned `Result` only when raw `Input`/`Output`
+payloads surround it; an expanded tool with nothing to show says so.
 Expanded tools show the first 30 lines of each output section with a count of
 the hidden lines; `o` in browse mode (and transcript search) shows everything.
 Thinking blocks display only reasoning text actually supplied by the harness. When

@@ -89,6 +89,7 @@ type Model struct {
 	pendingFirstPrompt                                     *harness.Prompt
 	pendingFirstDraft                                      string
 	toolSpinnerFrame                                       int
+	clock                                                  time.Time // last tick; labels running tools
 	effortPending                                          bool
 	pendingSetup                                           *sessionSetupRequest
 	configPending                                          bool
@@ -376,8 +377,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds = append(cmds, m.refreshBranch(time.Time(msg)))
 		frame := int(time.Time(msg).UnixMilli() / 120)
-		if frame != m.toolSpinnerFrame && !m.opts.Settings.ReducedMotion {
+		// Running tools show elapsed seconds, so they also refresh once per
+		// second when reduced motion stops the spinner.
+		second := time.Time(msg).Unix() != m.clock.Unix()
+		m.clock = time.Time(msg)
+		spin := frame != m.toolSpinnerFrame && !m.opts.Settings.ReducedMotion
+		if spin {
 			m.toolSpinnerFrame = frame
+		}
+		if spin || second {
 			if c := m.state.Active(); c != nil {
 				for _, root := range c.Entries {
 					root.Walk(func(entry *app.Entry) {
@@ -585,7 +593,7 @@ func boolInt(v bool) int {
 
 func (m *Model) refresh() {
 	follow := m.following && m.textSelection == nil
-	text, positions := m.renderer.Render(m.state.Active(), transcript.Options{Width: m.viewport.Width(), Selected: m.selected, Focused: m.focusedTranscript, Thoughts: m.opts.Settings.ShowThoughts, Compact: m.opts.Settings.Compact, Search: m.searchQuery, SearchOccurrence: m.searchOccurrence, Expanded: m.expanded, Terminals: m.state.TerminalOutputs, SpinnerFrame: m.toolSpinnerFrame, ReducedMotion: m.opts.Settings.ReducedMotion, Clock24: m.opts.Settings.Clock24})
+	text, positions := m.renderer.Render(m.state.Active(), transcript.Options{Width: m.viewport.Width(), Selected: m.selected, Focused: m.focusedTranscript, Thoughts: m.opts.Settings.ShowThoughts, Compact: m.opts.Settings.Compact, Search: m.searchQuery, SearchOccurrence: m.searchOccurrence, Expanded: m.expanded, Terminals: m.state.TerminalOutputs, SpinnerFrame: m.toolSpinnerFrame, Now: m.clock, ReducedMotion: m.opts.Settings.ReducedMotion, Clock24: m.opts.Settings.Clock24})
 	m.positions = positions
 	m.validateTextSelection(text)
 	m.transcriptContent = text
